@@ -11,6 +11,15 @@ This document serves as a persistent record of all completed steps, architectura
 - **Bugfix (CSS Compilation):** Fixed a critical build error where Tailwind CSS v4 was installed but the Vite plugin (`@tailwindcss/vite`) was missing. The browser was ignoring all classes. The styles (Apple UI, animations, lightbox constraints) now compile and render flawlessly.
 - **Git Commit:** Committed with message `fix: resolve tailwind css v4 compilation issue in vite build`.
 
+## [Phase 2.0] - 2026-07-05 - Multi-Media Detection & On-Page Download
+**Status: Completed**
+
+- **Media Detection:** Expanded the content script to detect `<video>`, `<audio>`, and `<a>` links pointing to documents (`.pdf`, `.doc`, etc.).
+- **Document Titles:** Extracted the text content of document links to display their real names in the popup.
+- **On-Page Floating Button:** Injected a global hover button ("MDP") that automatically positions itself over any hovered media (image, video, or audio) directly on the host website, allowing instant downloads without opening the popup.
+- **Popup UI Filters:** Added a beautiful scrolling filter bar (Tous, Images, Vidéos, Audios, Docs) beneath the header to easily navigate extracted media.
+- **Git Commit:** Committed with message `feat: implement Sprint 2 multi-media detection and on-page floating button`.
+
 ## [Hotfix] - 2026-07-04 - Safety checks on variants
 **Status: Completed**
 

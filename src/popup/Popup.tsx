@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Download, Search, Maximize2, Check, X, ChevronDown } from 'lucide-react';
+import { Download, Search, Maximize2, Check, X, ChevronDown, Film, Music, FileText, Image as ImageIcon } from 'lucide-react';
+
+export type MediaType = 'image' | 'video' | 'audio' | 'document';
 
 export interface MediaVariant {
   url: string;
@@ -9,7 +11,9 @@ export interface MediaVariant {
 
 export interface MediaItem {
   id: string;
+  type: MediaType;
   thumbnail: string;
+  title?: string;
   variants: MediaVariant[];
 }
 
@@ -18,12 +22,13 @@ export default function Popup() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [previewImage, setPreviewImage] = useState<MediaItem | null>(null);
   const [selectedQualityUrl, setSelectedQualityUrl] = useState<string>("");
+  const [filter, setFilter] = useState<MediaType | 'all'>('all');
 
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs: chrome.tabs.Tab[]) => {
       const activeTab = tabs[0];
       if (activeTab && activeTab.id) {
-        chrome.tabs.sendMessage(activeTab.id, { action: "SCAN_IMAGES" }, (response: any) => {
+        chrome.tabs.sendMessage(activeTab.id, { action: "SCAN_MEDIA" }, (response: any) => {
           if (chrome.runtime.lastError) {
             console.warn("Could not connect to content script. Please refresh the page.");
             return;
@@ -46,11 +51,13 @@ export default function Popup() {
     setSelectedIds(newSet);
   };
 
+  const filteredMedia = images.filter(img => filter === 'all' || img.type === filter);
+
   const selectAll = () => {
-    if (selectedIds.size === images.length) {
+    if (selectedIds.size === filteredMedia.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(images.map(img => img.id)));
+      setSelectedIds(new Set(filteredMedia.map(img => img.id)));
     }
   };
 
@@ -61,44 +68,81 @@ export default function Popup() {
   const handleDownloadSelected = () => {
     const urlsToDownload = images
       .filter(img => selectedIds.has(img.id))
-      .map(img => img.variants?.[0]?.url || img.thumbnail); // default to best quality (index 0)
+      .map(img => img.variants?.[0]?.url || img.thumbnail); 
     downloadUrls(urlsToDownload);
   };
 
   const openPreview = (img: MediaItem) => {
+    if (img.type !== 'image') return; // Only preview images as requested
     setPreviewImage(img);
     setSelectedQualityUrl(img.variants?.[0]?.url || img.thumbnail);
+  };
+
+  const renderThumbnail = (img: MediaItem) => {
+    if (img.type === 'image' || (img.type === 'video' && img.thumbnail)) {
+      return <img src={img.thumbnail} className="object-cover w-full h-full" alt="thumbnail" />;
+    }
+    // Fallbacks
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-full bg-gray-100 text-gray-400 p-4">
+        {img.type === 'video' && <Film size={32} />}
+        {img.type === 'audio' && <Music size={32} />}
+        {img.type === 'document' && <FileText size={32} />}
+        {img.title && <p className="text-[10px] font-medium text-gray-500 mt-2 text-center line-clamp-2">{img.title}</p>}
+      </div>
+    );
   };
 
   return (
     <div className="flex flex-col h-full w-full bg-[#f5f5f7] text-gray-900 overflow-hidden font-sans">
       
-      {/* Header - Apple Style (Translucent) */}
+      {/* Header - Apple Style */}
       <div className="flex flex-col pt-5 pb-3 px-5 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-20 shrink-0">
         <h1 className="text-2xl font-bold tracking-tight text-gray-900">Médias</h1>
-        <div className="flex items-center justify-between mt-2">
-          <span className="text-sm font-medium text-gray-500">
-            {images.length} élément{images.length > 1 ? 's' : ''} détecté{images.length > 1 ? 's' : ''}
+        
+        {/* Category Filters */}
+        <div className="flex items-center space-x-2 mt-4 overflow-x-auto pb-1 scrollbar-hide">
+          {[
+            { id: 'all', label: 'Tous' },
+            { id: 'image', label: 'Images', icon: <ImageIcon size={14} /> },
+            { id: 'video', label: 'Vidéos', icon: <Film size={14} /> },
+            { id: 'audio', label: 'Audios', icon: <Music size={14} /> },
+            { id: 'document', label: 'Docs', icon: <FileText size={14} /> }
+          ].map(cat => (
+            <button
+              key={cat.id}
+              onClick={() => setFilter(cat.id as any)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors
+                ${filter === cat.id ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >
+              {cat.icon} {cat.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between mt-3">
+          <span className="text-xs font-medium text-gray-500">
+            {filteredMedia.length} élément{filteredMedia.length > 1 ? 's' : ''} affiché{filteredMedia.length > 1 ? 's' : ''}
           </span>
           <button 
             onClick={selectAll}
-            className="text-sm font-semibold text-blue-500 hover:text-blue-600 transition-colors active:opacity-70"
+            className="text-xs font-semibold text-blue-500 hover:text-blue-600 transition-colors active:opacity-70"
           >
-            {selectedIds.size === images.length && images.length > 0 ? "Tout désélectionner" : "Tout sélectionner"}
+            {selectedIds.size === filteredMedia.length && filteredMedia.length > 0 ? "Tout désélectionner" : "Tout sélectionner"}
           </button>
         </div>
       </div>
 
       {/* Content Grid */}
       <div className="flex-1 overflow-y-auto p-4 relative z-0">
-        {images.length === 0 ? (
+        {filteredMedia.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-3">
             <Search size={48} className="opacity-20" strokeWidth={1.5} />
-            <p className="text-sm font-medium">Aucun média détecté</p>
+            <p className="text-sm font-medium">Aucun média trouvé</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 pb-24">
-            {images.map((img) => {
+            {filteredMedia.map((img) => {
               const isSelected = selectedIds.has(img.id);
               return (
                 <div 
@@ -106,9 +150,9 @@ export default function Popup() {
                   className={`group relative aspect-square bg-white rounded-2xl overflow-hidden shadow-sm transition-all duration-300
                     ${isSelected ? 'ring-4 ring-blue-500 ring-offset-2 ring-offset-[#f5f5f7] scale-[0.96]' : 'hover:shadow-md hover:scale-[1.02] border border-gray-100'}`}
                 >
-                  <img src={img.thumbnail} className="object-cover w-full h-full" alt="thumbnail" />
+                  {renderThumbnail(img)}
                   
-                  {/* Selection Checkbox (Apple Style iOS Check) */}
+                  {/* Selection Checkbox */}
                   <button 
                     onClick={() => toggleSelection(img.id)}
                     className={`absolute top-2 left-2 p-1.5 rounded-full shadow-sm transition-all z-10 backdrop-blur-md
@@ -117,18 +161,29 @@ export default function Popup() {
                     <Check size={16} strokeWidth={3} />
                   </button>
 
+                  {/* Type Badge */}
+                  {img.type !== 'image' && (
+                    <div className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 text-white backdrop-blur-md">
+                      {img.type === 'video' && <Film size={14} />}
+                      {img.type === 'audio' && <Music size={14} />}
+                      {img.type === 'document' && <FileText size={14} />}
+                    </div>
+                  )}
+
                   {/* Hover Overlay */}
                   <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2 pointer-events-none">
                     <div className="flex justify-between items-center w-full pointer-events-auto gap-2">
-                      <button 
-                        onClick={() => openPreview(img)}
-                        className="bg-white/80 backdrop-blur-md hover:bg-white text-gray-900 p-2 rounded-xl shadow-lg transition-transform hover:scale-105 active:scale-95"
-                        title="Aperçu"
-                      >
-                        <Maximize2 size={16} strokeWidth={2} />
-                      </button>
+                      {img.type === 'image' ? (
+                        <button 
+                          onClick={() => openPreview(img)}
+                          className="bg-white/80 backdrop-blur-md hover:bg-white text-gray-900 p-2 rounded-xl shadow-lg transition-transform hover:scale-105 active:scale-95"
+                          title="Aperçu"
+                        >
+                          <Maximize2 size={16} strokeWidth={2} />
+                        </button>
+                      ) : <div className="flex-1"></div>}
 
-                      {/* Direct Download with Quality Select */}
+                      {/* Direct Download */}
                       <div className="flex items-stretch bg-blue-500/90 backdrop-blur-md rounded-xl shadow-lg text-white hover:bg-blue-500 transition-colors">
                         <button 
                           onClick={() => downloadUrls([img.variants?.[0]?.url || img.thumbnail])}
@@ -164,7 +219,7 @@ export default function Popup() {
         )}
       </div>
 
-      {/* Footer Action (Floating Apple Style Button) */}
+      {/* Footer Action */}
       <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#f5f5f7] via-[#f5f5f7]/90 to-transparent pt-12 z-10">
         <button 
           onClick={handleDownloadSelected}
@@ -176,11 +231,9 @@ export default function Popup() {
         </button>
       </div>
 
-      {/* Preview Lightbox / Modal (Apple Style Blur) */}
+      {/* Preview Lightbox / Modal */}
       {previewImage && (
         <div className="absolute inset-0 z-50 bg-black/40 backdrop-blur-xl flex flex-col transition-all duration-300">
-          
-          {/* Lightbox Header */}
           <div className="flex justify-between items-center p-4 bg-transparent">
             <h2 className="font-semibold text-white/90 text-lg drop-shadow-md">Aperçu</h2>
             <button 
@@ -191,7 +244,6 @@ export default function Popup() {
             </button>
           </div>
 
-          {/* Lightbox Image */}
           <div className="flex-1 p-4 flex items-center justify-center overflow-hidden">
             <img 
               src={selectedQualityUrl} 
@@ -200,7 +252,6 @@ export default function Popup() {
             />
           </div>
 
-          {/* Lightbox Footer */}
           <div className="p-6 bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.1)] space-y-4">
             <div>
               <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider ml-1">Sélectionner la qualité</label>
