@@ -61,13 +61,13 @@ export default function Popup() {
   const handleDownloadSelected = () => {
     const urlsToDownload = images
       .filter(img => selectedIds.has(img.id))
-      .map(img => img.variants[0]?.url || img.thumbnail); // default to best quality (index 0)
+      .map(img => img.variants?.[0]?.url || img.thumbnail); // default to best quality (index 0)
     downloadUrls(urlsToDownload);
   };
 
   const openPreview = (img: MediaItem) => {
     setPreviewImage(img);
-    setSelectedQualityUrl(img.variants[0]?.url || img.thumbnail);
+    setSelectedQualityUrl(img.variants?.[0]?.url || img.thumbnail);
   };
 
   return (
@@ -137,13 +137,13 @@ export default function Popup() {
                         >
                           <Download size={14} />
                         </button>
-                        {img.variants.length > 1 && (
+                        {img.variants?.length > 1 && (
                           <div className="relative group/dropdown">
                             <button className="px-1.5 py-1.5 flex items-center">
                               <ChevronDown size={14} />
                             </button>
                             <div className="absolute bottom-full right-0 mb-1 hidden group-hover/dropdown:block bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden w-32 z-20">
-                              {img.variants.map((v, i) => (
+                              {img.variants?.map((v, i) => (
                                 <button
                                   key={i}
                                   onClick={() => downloadUrls([v.url])}
@@ -212,7 +212,7 @@ export default function Popup() {
                 onChange={(e) => setSelectedQualityUrl(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 outline-none cursor-pointer"
               >
-                {previewImage.variants.map((v, i) => (
+                {previewImage.variants?.map((v, i) => (
                   <option key={i} value={v.url}>
                     {v.label} {v.width ? `(${v.width}px)` : ''}
                   </option>
