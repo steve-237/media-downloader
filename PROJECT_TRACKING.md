@@ -2,6 +2,14 @@
 
 This document serves as a persistent record of all completed steps, architectural decisions, and features implemented during the development of the Media Downloader Pro extension.
 
+## [Phase 1.6] - 2026-07-05 - Apple / iOS UI Overhaul & Preview Fix
+**Status: Completed**
+
+- **UI Redesign:** Applied the "Apple / iOS" design system as requested. Added `backdrop-blur-xl`, large rounded corners (`rounded-2xl`, `rounded-3xl`), soft shadows, and translucent overlapping headers/footers.
+- **Bugfix (Preview Modal):** Fixed the CSS height constraint on the `#root` and `body` elements that prevented the image lightbox preview from expanding correctly to full size.
+- **Interactions:** Added scale hover effects (`hover:scale-[1.02]`) and active tap states (`active:scale-95`) for a premium mobile-like feel.
+- **Git Commit:** Committed with message `feat: implement Apple iOS style redesign and fix preview modal height bug`.
+
 ## [Hotfix] - 2026-07-04 - Safety checks on variants
 **Status: Completed**
 
