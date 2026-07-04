@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Search, Maximize2, Check, X, CheckSquare, Square, ChevronDown } from 'lucide-react';
+import { Download, Search, Maximize2, Check, X, ChevronDown } from 'lucide-react';
 
 export interface MediaVariant {
   url: string;
@@ -71,83 +71,82 @@ export default function Popup() {
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-white text-slate-900 overflow-hidden font-sans">
+    <div className="flex flex-col h-full w-full bg-[#f5f5f7] text-gray-900 overflow-hidden font-sans">
       
-      {/* Header */}
-      <div className="flex flex-col p-4 border-b border-slate-200 shadow-sm z-10 bg-white">
-        <h1 className="text-xl font-semibold tracking-tight">Media Downloader</h1>
-        <div className="flex items-center justify-between mt-3">
-          <div className="flex items-center space-x-2">
-            <span className="text-sm font-medium text-slate-600">{images.length} éléments détectés</span>
-          </div>
+      {/* Header - Apple Style (Translucent) */}
+      <div className="flex flex-col pt-5 pb-3 px-5 bg-white/80 backdrop-blur-xl border-b border-gray-200/50 z-20 shrink-0">
+        <h1 className="text-2xl font-bold tracking-tight text-gray-900">Médias</h1>
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-sm font-medium text-gray-500">
+            {images.length} élément{images.length > 1 ? 's' : ''} détecté{images.length > 1 ? 's' : ''}
+          </span>
           <button 
             onClick={selectAll}
-            className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors flex items-center gap-1"
+            className="text-sm font-semibold text-blue-500 hover:text-blue-600 transition-colors active:opacity-70"
           >
-            {selectedIds.size === images.length && images.length > 0 ? <CheckSquare size={14} /> : <Square size={14} />}
-            Tout sélectionner
+            {selectedIds.size === images.length && images.length > 0 ? "Tout désélectionner" : "Tout sélectionner"}
           </button>
         </div>
       </div>
 
       {/* Content Grid */}
-      <div className="flex-1 overflow-y-auto p-4 bg-slate-50 relative">
+      <div className="flex-1 overflow-y-auto p-4 relative z-0">
         {images.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400">
-            <Search size={40} className="mb-3 opacity-20" />
+          <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-3">
+            <Search size={48} className="opacity-20" strokeWidth={1.5} />
             <p className="text-sm font-medium">Aucun média détecté</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4 pb-4">
+          <div className="grid grid-cols-2 gap-3 pb-24">
             {images.map((img) => {
               const isSelected = selectedIds.has(img.id);
               return (
                 <div 
                   key={img.id} 
-                  className={`group relative aspect-square bg-white rounded-xl overflow-hidden border-2 transition-all shadow-sm
-                    ${isSelected ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}`}
+                  className={`group relative aspect-square bg-white rounded-2xl overflow-hidden shadow-sm transition-all duration-300
+                    ${isSelected ? 'ring-4 ring-blue-500 ring-offset-2 ring-offset-[#f5f5f7] scale-[0.96]' : 'hover:shadow-md hover:scale-[1.02] border border-gray-100'}`}
                 >
                   <img src={img.thumbnail} className="object-cover w-full h-full" alt="thumbnail" />
                   
-                  {/* Selection Checkbox (Top Left) */}
+                  {/* Selection Checkbox (Apple Style iOS Check) */}
                   <button 
                     onClick={() => toggleSelection(img.id)}
-                    className={`absolute top-2 left-2 p-1 rounded bg-white shadow border transition-colors z-10
-                      ${isSelected ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300 text-transparent group-hover:text-slate-300 hover:border-slate-400'}`}
+                    className={`absolute top-2 left-2 p-1.5 rounded-full shadow-sm transition-all z-10 backdrop-blur-md
+                      ${isSelected ? 'bg-blue-500 text-white' : 'bg-black/20 text-transparent hover:bg-black/30'}`}
                   >
-                    <Check size={14} strokeWidth={3} />
+                    <Check size={16} strokeWidth={3} />
                   </button>
 
                   {/* Hover Overlay */}
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 pointer-events-none">
-                    <div className="flex justify-between items-center w-full pointer-events-auto">
+                  <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2 pointer-events-none">
+                    <div className="flex justify-between items-center w-full pointer-events-auto gap-2">
                       <button 
                         onClick={() => openPreview(img)}
-                        className="bg-white/90 hover:bg-white text-slate-800 p-1.5 rounded-md shadow backdrop-blur-sm transition-transform hover:scale-105"
+                        className="bg-white/80 backdrop-blur-md hover:bg-white text-gray-900 p-2 rounded-xl shadow-lg transition-transform hover:scale-105 active:scale-95"
                         title="Aperçu"
                       >
-                        <Maximize2 size={16} />
+                        <Maximize2 size={16} strokeWidth={2} />
                       </button>
 
                       {/* Direct Download with Quality Select */}
-                      <div className="relative flex items-center bg-blue-600 rounded-md shadow text-white hover:bg-blue-700 transition-colors">
+                      <div className="flex items-stretch bg-blue-500/90 backdrop-blur-md rounded-xl shadow-lg text-white hover:bg-blue-500 transition-colors">
                         <button 
-                          onClick={() => downloadUrls([img.variants[0]?.url || img.thumbnail])}
-                          className="px-2.5 py-1.5 font-medium text-xs border-r border-blue-500/50"
+                          onClick={() => downloadUrls([img.variants?.[0]?.url || img.thumbnail])}
+                          className="px-3 py-2 font-medium border-r border-blue-400/50 flex-1 flex justify-center active:bg-blue-600 rounded-l-xl"
                         >
-                          <Download size={14} />
+                          <Download size={16} />
                         </button>
                         {img.variants?.length > 1 && (
-                          <div className="relative group/dropdown">
-                            <button className="px-1.5 py-1.5 flex items-center">
-                              <ChevronDown size={14} />
+                          <div className="relative group/dropdown flex">
+                            <button className="px-2 py-2 flex items-center justify-center active:bg-blue-600 rounded-r-xl">
+                              <ChevronDown size={16} />
                             </button>
-                            <div className="absolute bottom-full right-0 mb-1 hidden group-hover/dropdown:block bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden w-32 z-20">
+                            <div className="absolute bottom-full right-0 mb-2 hidden group-hover/dropdown:block bg-white/95 backdrop-blur-xl border border-gray-100 rounded-xl shadow-xl overflow-hidden w-36 z-20 p-1">
                               {img.variants?.map((v, i) => (
                                 <button
                                   key={i}
                                   onClick={() => downloadUrls([v.url])}
-                                  className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 border-b border-slate-100 last:border-0 truncate block"
+                                  className="w-full text-left px-3 py-2.5 text-xs font-medium text-gray-800 hover:bg-blue-50 hover:text-blue-600 rounded-lg transition-colors truncate block"
                                 >
                                   {v.label}
                                 </button>
@@ -156,7 +155,6 @@ export default function Popup() {
                           </div>
                         )}
                       </div>
-
                     </div>
                   </div>
                 </div>
@@ -166,58 +164,62 @@ export default function Popup() {
         )}
       </div>
 
-      {/* Footer Action */}
-      <div className="p-4 border-t border-slate-200 bg-white">
+      {/* Footer Action (Floating Apple Style Button) */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#f5f5f7] via-[#f5f5f7]/90 to-transparent pt-12 z-10">
         <button 
           onClick={handleDownloadSelected}
           disabled={selectedIds.size === 0}
-          className="w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 px-4 rounded-lg shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100 flex items-center justify-center gap-2"
+          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3.5 px-4 rounded-2xl shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 disabled:shadow-none flex items-center justify-center gap-2"
         >
-          <Download size={18} />
-          Télécharger la sélection ({selectedIds.size})
+          <Download size={20} strokeWidth={2.5} />
+          Télécharger ({selectedIds.size})
         </button>
       </div>
 
-      {/* Preview Lightbox / Modal */}
+      {/* Preview Lightbox / Modal (Apple Style Blur) */}
       {previewImage && (
-        <div className="absolute inset-0 z-50 bg-white flex flex-col transition-all duration-200">
+        <div className="absolute inset-0 z-50 bg-black/40 backdrop-blur-xl flex flex-col transition-all duration-300">
+          
           {/* Lightbox Header */}
-          <div className="flex justify-between items-center p-4 border-b border-slate-100 shadow-sm">
-            <h2 className="font-semibold text-slate-800 truncate flex-1 pr-4">Aperçu détaillé</h2>
+          <div className="flex justify-between items-center p-4 bg-transparent">
+            <h2 className="font-semibold text-white/90 text-lg drop-shadow-md">Aperçu</h2>
             <button 
               onClick={() => setPreviewImage(null)}
-              className="p-1 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full transition-colors"
+              className="p-2 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 rounded-full backdrop-blur-md transition-all active:scale-95"
             >
-              <X size={20} />
+              <X size={20} strokeWidth={2.5} />
             </button>
           </div>
 
           {/* Lightbox Image */}
-          <div className="flex-1 bg-slate-50 p-4 flex items-center justify-center overflow-hidden">
-            <div className="relative w-full h-full rounded-lg border border-slate-200 overflow-hidden shadow-sm bg-white">
-              <img 
-                src={selectedQualityUrl} 
-                className="object-contain w-full h-full" 
-                alt="preview" 
-              />
-            </div>
+          <div className="flex-1 p-4 flex items-center justify-center overflow-hidden">
+            <img 
+              src={selectedQualityUrl} 
+              className="object-contain max-w-full max-h-full rounded-xl shadow-2xl" 
+              alt="preview" 
+            />
           </div>
 
-          {/* Lightbox Footer (Download controls) */}
-          <div className="p-4 border-t border-slate-100 bg-white space-y-3 shadow-lg">
+          {/* Lightbox Footer */}
+          <div className="p-6 bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.1)] space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Qualité</label>
-              <select 
-                value={selectedQualityUrl}
-                onChange={(e) => setSelectedQualityUrl(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 outline-none cursor-pointer"
-              >
-                {previewImage.variants?.map((v, i) => (
-                  <option key={i} value={v.url}>
-                    {v.label} {v.width ? `(${v.width}px)` : ''}
-                  </option>
-                ))}
-              </select>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5 uppercase tracking-wider ml-1">Sélectionner la qualité</label>
+              <div className="relative">
+                <select 
+                  value={selectedQualityUrl}
+                  onChange={(e) => setSelectedQualityUrl(e.target.value)}
+                  className="w-full appearance-none bg-gray-50 border border-gray-200 text-gray-800 text-sm font-medium rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 block p-3.5 pr-10 outline-none cursor-pointer transition-shadow"
+                >
+                  {previewImage.variants?.map((v, i) => (
+                    <option key={i} value={v.url}>
+                      {v.label} {v.width ? `(${v.width}px)` : ''}
+                    </option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                  <ChevronDown size={16} />
+                </div>
+              </div>
             </div>
             
             <button 
@@ -225,10 +227,10 @@ export default function Popup() {
                 downloadUrls([selectedQualityUrl]);
                 setPreviewImage(null);
               }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-4 rounded-lg shadow-sm transition-all active:scale-95 flex items-center justify-center gap-2"
+              className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
             >
-              <Download size={18} />
-              Télécharger l'image
+              <Download size={20} strokeWidth={2.5} />
+              Enregistrer l'image
             </button>
           </div>
         </div>
