@@ -2,6 +2,12 @@
 
 This document serves as a persistent record of all completed steps, architectural decisions, and features implemented during the development of the Media Downloader Pro extension.
 
+## [Hotfix] - 2026-07-04 - Safety checks on variants
+**Status: Completed**
+
+- **Bugfix:** Added optional chaining (`?.`) throughout `src/popup/Popup.tsx` for `img.variants` to prevent potential React "Objects are not valid as a React child" rendering errors if variant extraction returns unexpected formats or `undefined`.
+- **Git Commit:** Committed with message `fix: add safety optional chaining for media variants`.
+
 ## [Phase 1.5] - 2026-07-04 - UX/UI Overhaul & Quality Selection
 **Status: Completed**
 
