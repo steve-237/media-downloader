@@ -8,7 +8,8 @@ This document serves as a persistent record of all completed steps, architectura
 - **UI Redesign:** Applied the "Apple / iOS" design system as requested. Added `backdrop-blur-xl`, large rounded corners (`rounded-2xl`, `rounded-3xl`), soft shadows, and translucent overlapping headers/footers.
 - **Bugfix (Preview Modal):** Fixed the CSS height constraint on the `#root` and `body` elements that prevented the image lightbox preview from expanding correctly to full size.
 - **Interactions:** Added scale hover effects (`hover:scale-[1.02]`) and active tap states (`active:scale-95`) for a premium mobile-like feel.
-- **Git Commit:** Committed with message `feat: implement Apple iOS style redesign and fix preview modal height bug`.
+- **Bugfix (CSS Compilation):** Fixed a critical build error where Tailwind CSS v4 was installed but the Vite plugin (`@tailwindcss/vite`) was missing. The browser was ignoring all classes. The styles (Apple UI, animations, lightbox constraints) now compile and render flawlessly.
+- **Git Commit:** Committed with message `fix: resolve tailwind css v4 compilation issue in vite build`.
 
 ## [Hotfix] - 2026-07-04 - Safety checks on variants
 **Status: Completed**
