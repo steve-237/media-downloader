@@ -240,49 +240,87 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
 let activeMediaUrl = "";
 
-function findMedia(el: HTMLElement | null): HTMLElement | null {
+const ALL_MEDIA_EXT = new Set([...VIDEO_EXT, ...AUDIO_EXT, ...DOC_EXT]);
+
+/** Check if a URL points to a downloadable media file */
+function isMediaUrl(url: string | null): boolean {
+  if (!url || !isHttp(url)) return false;
+  const ext = getExt(url);
+  return ALL_MEDIA_EXT.has(ext) || VIDEO_EXT.has(ext) || AUDIO_EXT.has(ext) || DOC_EXT.has(ext);
+}
+
+/**
+ * Walk up DOM to find any element that has downloadable media.
+ * Supports: <img>, <video>, <audio>, <a href="file.pdf">, <embed>, <object>, <iframe>, [data-src]
+ */
+function findDownloadable(el: HTMLElement | null): { element: HTMLElement; url: string } | null {
   let cur = el;
   for (let depth = 0; depth < 8 && cur; depth++) {
     const tag = cur.tagName;
-    if (tag === 'IMG' || tag === 'VIDEO' || tag === 'AUDIO') return cur;
-    // Check for direct media child
+
+    // --- Direct media elements ---
+    if (tag === 'IMG') {
+      const img = cur as HTMLImageElement;
+      const src = img.currentSrc || img.src;
+      if (src && isHttp(src)) return { element: cur, url: src };
+    }
+
+    if (tag === 'VIDEO') {
+      const v = cur as HTMLVideoElement;
+      if (v.currentSrc && !v.currentSrc.startsWith('blob:') && isHttp(v.currentSrc)) return { element: cur, url: v.currentSrc };
+      if (v.src && !v.src.startsWith('blob:') && isHttp(v.src)) return { element: cur, url: v.src };
+      for (const s of v.querySelectorAll('source')) {
+        const u = s.src || s.getAttribute('src');
+        if (u && !u.startsWith('blob:') && isHttp(u)) return { element: cur, url: u };
+      }
+      if (v.poster && isHttp(v.poster)) return { element: cur, url: v.poster };
+    }
+
+    if (tag === 'AUDIO') {
+      const a = cur as HTMLAudioElement;
+      if (a.currentSrc && !a.currentSrc.startsWith('blob:') && isHttp(a.currentSrc)) return { element: cur, url: a.currentSrc };
+      if (a.src && !a.src.startsWith('blob:') && isHttp(a.src)) return { element: cur, url: a.src };
+      for (const s of a.querySelectorAll('source')) {
+        const u = s.src || s.getAttribute('src');
+        if (u && !u.startsWith('blob:') && isHttp(u)) return { element: cur, url: u };
+      }
+    }
+
+    // --- Links to media files ---
+    if (tag === 'A') {
+      const href = (cur as HTMLAnchorElement).href;
+      const url = abs(href);
+      if (url && isHttp(url) && isMediaUrl(url)) return { element: cur, url };
+    }
+
+    // --- Embedded media ---
+    if (tag === 'EMBED' || tag === 'OBJECT' || tag === 'IFRAME') {
+      const src = abs(cur.getAttribute('src') || cur.getAttribute('data'));
+      if (src && isHttp(src)) {
+        const ext = getExt(src);
+        if (ALL_MEDIA_EXT.has(ext) || ext === '.pdf') return { element: cur, url: src };
+      }
+    }
+
+    // --- data-src and similar attributes ---
+    const dataAttrs = ['data-src', 'data-video-src', 'data-audio-src', 'data-url', 'data-href', 'data-mp4', 'data-webm'];
+    for (const attr of dataAttrs) {
+      const val = cur.getAttribute(attr);
+      const url = abs(val);
+      if (url && isHttp(url) && isMediaUrl(url)) return { element: cur, url };
+    }
+
+    // --- Check for direct media children ---
     const child = cur.querySelector(':scope > video, :scope > audio, :scope > img') as HTMLElement | null;
     if (child) {
       const rect = child.getBoundingClientRect();
-      if (rect.width > 30 && rect.height > 30) return child;
+      if (rect.width > 30 && rect.height > 30) {
+        const result = findDownloadable(child);
+        if (result) return result;
+      }
     }
-    cur = cur.parentElement;
-  }
-  return null;
-}
 
-function extractUrl(el: HTMLElement): string | null {
-  const tag = el.tagName;
-  if (tag === 'IMG') {
-    const img = el as HTMLImageElement;
-    return img.currentSrc || img.src || null;
-  }
-  if (tag === 'VIDEO') {
-    const v = el as HTMLVideoElement;
-    // Prefer non-blob source
-    if (v.currentSrc && !v.currentSrc.startsWith('blob:')) return v.currentSrc;
-    if (v.src && !v.src.startsWith('blob:')) return v.src;
-    for (const s of v.querySelectorAll('source')) {
-      const u = s.src || s.getAttribute('src');
-      if (u && !u.startsWith('blob:')) return u;
-    }
-    // Fallback: poster image
-    return v.poster || null;
-  }
-  if (tag === 'AUDIO') {
-    const a = el as HTMLAudioElement;
-    if (a.currentSrc && !a.currentSrc.startsWith('blob:')) return a.currentSrc;
-    if (a.src && !a.src.startsWith('blob:')) return a.src;
-    for (const s of a.querySelectorAll('source')) {
-      const u = s.src || s.getAttribute('src');
-      if (u && !u.startsWith('blob:')) return u;
-    }
-    return null;
+    cur = cur.parentElement;
   }
   return null;
 }
@@ -329,12 +367,11 @@ function resetBtn() {
 }
 resetBtn();
 
-// Append to <html> (not <body>) so it exists even on pages without body
+// Append to <html>
 document.documentElement.appendChild(mdpBtn);
 
 // -- Download handler --
 function triggerDownload(url: string) {
-  // Capture url locally so async callbacks use the right value
   const downloadUrl = url;
   console.log("MDP: Requesting download for:", downloadUrl);
 
@@ -342,11 +379,9 @@ function triggerDownload(url: string) {
     chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [downloadUrl] }, (resp) => {
       if (chrome.runtime.lastError) {
         console.warn("MDP: sendMessage failed, trying fallback:", chrome.runtime.lastError.message);
-        // Fallback: ask background to open in new tab
         try {
           chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url: downloadUrl });
         } catch {
-          // Last resort: create <a> tag
           const a = document.createElement('a');
           a.href = downloadUrl;
           a.download = getFilename(downloadUrl) || 'download';
@@ -385,7 +420,6 @@ mdpBtn.addEventListener("mousedown", (e) => {
 
   if (!activeMediaUrl) return;
 
-  // Trigger download
   triggerDownload(activeMediaUrl);
 
   // Visual feedback: green success
@@ -417,16 +451,22 @@ mdpBtn.addEventListener("click", (e) => {
 // -- Hover logic --
 let hideTimer: number | undefined;
 
-function showBtn(mediaEl: HTMLElement) {
-  const rect = mediaEl.getBoundingClientRect();
-  if (rect.width < 50 || rect.height < 50) return;
+function showBtn(el: HTMLElement) {
+  const rect = el.getBoundingClientRect();
+  // For links/documents, allow smaller elements (text links)
+  const minSize = (el.tagName === 'A' || el.tagName === 'EMBED' || el.tagName === 'OBJECT') ? 20 : 50;
+  if (rect.width < minSize || rect.height < minSize) return;
 
   clearTimeout(hideTimer);
   mdpBtn.style.display = "flex";
 
-  // Position top-right
+  // Position top-right of the element
   let top = rect.top + 8;
   let left = rect.right - 140;
+  // For small elements (text links), position to the right instead
+  if (rect.width < 140) {
+    left = rect.right + 8;
+  }
   if (top < 4) top = 4;
   if (left < 4) left = 4;
   if (top > window.innerHeight - 50) top = window.innerHeight - 50;
@@ -445,15 +485,11 @@ document.addEventListener("mouseover", (e) => {
     return;
   }
 
-  const media = findMedia(target);
-  if (media) {
-    const rawUrl = extractUrl(media);
-    if (!rawUrl) return;
-    const url = abs(rawUrl);
-    if (!isHttp(url)) return;
-
-    activeMediaUrl = url;
-    showBtn(media);
+  // Find any downloadable media (images, videos, audios, doc links, embeds...)
+  const result = findDownloadable(target);
+  if (result) {
+    activeMediaUrl = result.url;
+    showBtn(result.element);
   } else {
     hideTimer = window.setTimeout(() => { mdpBtn.style.display = "none"; }, 400);
   }
