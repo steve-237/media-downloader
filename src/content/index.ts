@@ -262,15 +262,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
 
 let activeMediaUrl = "";
 
-const ALL_MEDIA_EXT = new Set([...VIDEO_EXT, ...AUDIO_EXT, ...DOC_EXT]);
-
-/** Check if a URL points to a downloadable media file */
-function isMediaUrl(url: string | null): boolean {
-  if (!url || !isHttp(url)) return false;
-  const ext = getExt(url);
-  return ALL_MEDIA_EXT.has(ext) || VIDEO_EXT.has(ext) || AUDIO_EXT.has(ext) || DOC_EXT.has(ext);
-}
-
 /**
  * Walk up DOM to find any element that has downloadable media.
  * Supports: <img>, <video>, <audio>, <a href="file.pdf">, <embed>, <object>, <iframe>, [data-src]
@@ -280,60 +271,54 @@ function findDownloadable(el: HTMLElement | null): { element: HTMLElement; url: 
   for (let depth = 0; depth < 8 && cur; depth++) {
     const tag = cur.tagName;
 
-    // --- Direct media elements ---
-    if (tag === 'IMG') {
-      const img = cur as HTMLImageElement;
-      const src = img.currentSrc || img.src;
-      if (src && isHttp(src)) return { element: cur, url: src };
-    }
-
+    // --- Video elements ---
     if (tag === 'VIDEO') {
       const v = cur as HTMLVideoElement;
+      
       if (v.currentSrc && !v.currentSrc.startsWith('blob:') && isHttp(v.currentSrc)) return { element: cur, url: v.currentSrc };
       if (v.src && !v.src.startsWith('blob:') && isHttp(v.src)) return { element: cur, url: v.src };
+      
       for (const s of v.querySelectorAll('source')) {
         const u = s.src || s.getAttribute('src');
         if (u && !u.startsWith('blob:') && isHttp(u)) return { element: cur, url: u };
       }
-      if (v.poster && isHttp(v.poster)) return { element: cur, url: v.poster };
-    }
-
-    if (tag === 'AUDIO') {
-      const a = cur as HTMLAudioElement;
-      if (a.currentSrc && !a.currentSrc.startsWith('blob:') && isHttp(a.currentSrc)) return { element: cur, url: a.currentSrc };
-      if (a.src && !a.src.startsWith('blob:') && isHttp(a.src)) return { element: cur, url: a.src };
-      for (const s of a.querySelectorAll('source')) {
-        const u = s.src || s.getAttribute('src');
-        if (u && !u.startsWith('blob:') && isHttp(u)) return { element: cur, url: u };
+      
+      // If it's a blob: URL (like streaming sites), we intercept from network
+      if ((v.currentSrc && v.currentSrc.startsWith('blob:')) || (v.src && v.src.startsWith('blob:'))) {
+        return { element: cur, url: 'BLOB_VIDEO_STREAM' };
       }
+      
+      // Fallback: If we don't know the src but it's a video tag, try to download best network video
+      return { element: cur, url: 'BLOB_VIDEO_STREAM' };
     }
 
-    // --- Links to media files ---
+    // --- Links to video files ---
     if (tag === 'A') {
       const href = (cur as HTMLAnchorElement).href;
       const url = abs(href);
-      if (url && isHttp(url) && isMediaUrl(url)) return { element: cur, url };
+      if (url && isHttp(url) && VIDEO_EXT.has(getExt(url))) return { element: cur, url };
     }
 
-    // --- Embedded media ---
+    // --- Embedded videos ---
     if (tag === 'EMBED' || tag === 'OBJECT' || tag === 'IFRAME') {
       const src = abs(cur.getAttribute('src') || cur.getAttribute('data'));
       if (src && isHttp(src)) {
-        const ext = getExt(src);
-        if (ALL_MEDIA_EXT.has(ext) || ext === '.pdf') return { element: cur, url: src };
+        if (VIDEO_EXT.has(getExt(src)) || src.includes('youtube.com/embed') || src.includes('vimeo.com/video') || src.includes('dailymotion.com/video')) {
+          return { element: cur, url: src };
+        }
       }
     }
 
-    // --- data-src and similar attributes ---
-    const dataAttrs = ['data-src', 'data-video-src', 'data-audio-src', 'data-url', 'data-href', 'data-mp4', 'data-webm'];
+    // --- data-src video attributes ---
+    const dataAttrs = ['data-src', 'data-video-src', 'data-url', 'data-mp4', 'data-webm'];
     for (const attr of dataAttrs) {
       const val = cur.getAttribute(attr);
       const url = abs(val);
-      if (url && isHttp(url) && isMediaUrl(url)) return { element: cur, url };
+      if (url && isHttp(url) && VIDEO_EXT.has(getExt(url))) return { element: cur, url };
     }
 
-    // --- Check for direct media children ---
-    const child = cur.querySelector(':scope > video, :scope > audio, :scope > img') as HTMLElement | null;
+    // --- Check for direct video children ---
+    const child = cur.querySelector(':scope > video') as HTMLElement | null;
     if (child) {
       const rect = child.getBoundingClientRect();
       if (rect.width > 30 && rect.height > 30) {
@@ -394,6 +379,21 @@ document.documentElement.appendChild(mdpBtn);
 
 // -- Download handler --
 function triggerDownload(url: string) {
+  if (url === 'BLOB_VIDEO_STREAM') {
+    console.log("MDP: Blob video detected, asking background for best network video...");
+    try {
+      chrome.runtime.sendMessage({ action: "DOWNLOAD_BEST_VIDEO" }, (resp) => {
+        if (chrome.runtime.lastError || (resp && resp.error)) {
+          console.warn("MDP: Failed to download best video via network intercept:", chrome.runtime.lastError?.message || resp?.error);
+          alert("Désolé, aucune vidéo n'a encore été capturée sur le réseau pour cette page. Laissez la vidéo jouer quelques secondes et réessayez.");
+        }
+      });
+    } catch (err) {
+      console.error("MDP: runtime error", err);
+    }
+    return;
+  }
+
   const downloadUrl = url;
   console.log("MDP: Requesting download for:", downloadUrl);
 

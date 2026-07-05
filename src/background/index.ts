@@ -198,6 +198,44 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    // -- Download the best intercepted video for a blob stream --
+    if (request.action === "DOWNLOAD_BEST_VIDEO") {
+      const tabId = request.tabId || sender.tab?.id;
+      if (!tabId) {
+        sendResponse({ error: "No tab ID" });
+        return true;
+      }
+
+      const media = capturedMedia.get(tabId) || [];
+      const videos = media.filter(m => m.type === 'video');
+      
+      if (videos.length === 0) {
+        sendResponse({ error: "No video captured on the network yet" });
+        return true;
+      }
+
+      // Sort by size descending, then pick the first one
+      videos.sort((a, b) => (b.size || 0) - (a.size || 0));
+      const bestVideo = videos[0];
+
+      const filename = bestVideo.filename || getFilenameFromUrl(bestVideo.url) || "video.mp4";
+      console.log("MDP: Downloading best intercepted video", bestVideo.url);
+
+      chrome.downloads.download(
+        { url: bestVideo.url, filename, conflictAction: "uniquify" },
+        (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.error("MDP: Best video download failed:", chrome.runtime.lastError.message);
+            sendResponse({ error: chrome.runtime.lastError.message });
+          } else {
+            console.log("MDP: Best video download started, ID:", downloadId);
+            sendResponse({ status: "ok" });
+          }
+        }
+      );
+      return true;
+    }
+
     // -- Fallback: open URL in new tab --
     if (request.action === "DOWNLOAD_VIA_TAB") {
       const url: string = request.url;
