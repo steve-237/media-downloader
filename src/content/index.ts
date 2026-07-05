@@ -1,4 +1,8 @@
-console.log("Media Downloader Pro: Content script injected!");
+console.log("Media Downloader Pro: Content script loaded.");
+
+// ============================================================
+// TYPES
+// ============================================================
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document';
 
@@ -16,253 +20,261 @@ export interface MediaItem {
   variants: MediaVariant[];
 }
 
-function parseSrcset(srcsetString: string): { url: string; width?: number }[] {
-  const variants: { url: string; width?: number }[] = [];
-  if (!srcsetString) return variants;
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
 
-  const parts = srcsetString.split(',');
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (!trimmed) continue;
-    const segments = trimmed.split(/\s+/);
-    const url = segments[0];
-    let width: number | undefined;
-    
-    if (segments.length > 1) {
-      const descriptor = segments[1];
-      if (descriptor.endsWith('w')) {
-        width = parseInt(descriptor.slice(0, -1), 10);
-      }
-    }
-    
-    try {
-      const absoluteUrl = new URL(url, window.location.href).href;
-      variants.push({ url: absoluteUrl, width: isNaN(width!) ? undefined : width });
-    } catch (_e) {
-      // invalid URL
-    }
-  }
-  return variants;
-}
-
-function getAbsoluteUrl(url: string | null | undefined): string | null {
+function abs(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
     return new URL(url, window.location.href).href;
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
 
-const videoExtensions = ['.mp4', '.webm', '.ogg', '.ogv', '.avi', '.mov', '.mkv', '.m4v', '.flv', '.3gp'];
-const audioExtensions = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.oga', '.m4a', '.wma', '.opus'];
-const documentExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip', '.txt', '.ppt', '.pptx', '.rar', '.7z'];
+function isHttp(url: string | null): url is string {
+  return !!url && (url.startsWith('http://') || url.startsWith('https://'));
+}
 
-function getFileExtension(url: string): string {
+function parseSrcset(srcset: string): { url: string; width?: number }[] {
+  const result: { url: string; width?: number }[] = [];
+  if (!srcset) return result;
+  for (const part of srcset.split(',')) {
+    const tokens = part.trim().split(/\s+/);
+    if (!tokens[0]) continue;
+    const url = abs(tokens[0]);
+    if (!isHttp(url)) continue;
+    let width: number | undefined;
+    if (tokens[1]?.endsWith('w')) {
+      width = parseInt(tokens[1], 10);
+      if (isNaN(width)) width = undefined;
+    }
+    result.push({ url, width });
+  }
+  return result;
+}
+
+function getFilename(url: string): string {
   try {
     const pathname = new URL(url).pathname;
-    const lastDot = pathname.lastIndexOf('.');
-    if (lastDot === -1) return '';
-    return pathname.substring(lastDot).toLowerCase();
+    const seg = pathname.split('/').pop() || '';
+    return decodeURIComponent(seg.split('?')[0]);
   } catch {
     return '';
   }
 }
 
-function getFilenameFromUrl(url: string): string {
+function getExt(url: string): string {
   try {
-    const pathname = new URL(url).pathname;
-    const segments = pathname.split('/');
-    return decodeURIComponent(segments[segments.length - 1] || '');
+    const pathname = new URL(url).pathname.split('?')[0];
+    const dot = pathname.lastIndexOf('.');
+    return dot >= 0 ? pathname.substring(dot).toLowerCase() : '';
   } catch {
     return '';
   }
 }
 
-// ---------------------------------------------------------
-// Media Detection Engine (triggered by popup)
-// ---------------------------------------------------------
+const VIDEO_EXT = new Set(['.mp4', '.webm', '.ogg', '.ogv', '.avi', '.mov', '.mkv', '.m4v', '.flv', '.3gp']);
+const AUDIO_EXT = new Set(['.mp3', '.wav', '.flac', '.aac', '.oga', '.m4a', '.wma', '.opus']);
+const DOC_EXT = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip', '.txt', '.ppt', '.pptx', '.rar', '.7z']);
 
-chrome.runtime.onMessage.addListener((request: any, _sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
-  if (request.action === "SCAN_MEDIA") {
-    const mediaItems: MediaItem[] = [];
-    let idCounter = 0;
+// ============================================================
+// MEDIA SCANNER (called by popup via message)
+// ============================================================
 
-    // 1. Scan Images
-    document.querySelectorAll('img').forEach((img: HTMLImageElement) => {
-      const rawSrc = img.currentSrc || img.src;
-      const absUrl = getAbsoluteUrl(rawSrc);
-      if (!absUrl || !absUrl.startsWith('http')) return;
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  if (request.action !== "SCAN_MEDIA") return false;
 
-      let rawVariants: { url: string; width?: number }[] = [{ url: absUrl }];
-      if (img.srcset) rawVariants.push(...parseSrcset(img.srcset));
+  const items: MediaItem[] = [];
+  const seenUrls = new Set<string>();
+  let id = 0;
 
-      const parent = img.parentElement;
-      if (parent && parent.tagName.toLowerCase() === 'picture') {
-        parent.querySelectorAll('source').forEach(source => {
-          if (source.srcset) rawVariants.push(...parseSrcset(source.srcset));
-        });
-      }
-
-      const uniqueMap = new Map<string, { url: string; width?: number }>();
-      rawVariants.forEach(v => {
-        if (!uniqueMap.has(v.url)) uniqueMap.set(v.url, v);
-        else if (!uniqueMap.get(v.url)?.width && v.width) uniqueMap.set(v.url, v);
-      });
-
-      const processedVariants = Array.from(uniqueMap.values())
-        .sort((a, b) => (b.width || 0) - (a.width || 0))
-        .map((v, index, arr) => {
-          let label = "Original";
-          if (v.width) {
-            label = `${v.width}w`;
-            if (index === 0 && arr.length > 1) label += " (Max)";
-          } else if (arr.length > 1 && index === arr.length - 1) {
-            label = "Base";
-          }
-          return { url: v.url, width: v.width, label };
-        });
-
-      mediaItems.push({ id: `media_${idCounter++}`, type: 'image', thumbnail: absUrl, variants: processedVariants });
+  function addItem(type: MediaType, url: string, thumb: string, title?: string, variants?: MediaVariant[]) {
+    if (seenUrls.has(url)) return;
+    seenUrls.add(url);
+    items.push({
+      id: `m_${id++}`,
+      type,
+      thumbnail: thumb,
+      title,
+      variants: variants || [{ url, label: type === 'image' ? 'Original' : type === 'video' ? 'Vidéo' : type === 'audio' ? 'Audio' : 'Fichier' }],
     });
-
-    // 2. Scan Videos
-    document.querySelectorAll('video').forEach((video: HTMLVideoElement) => {
-      const sources: string[] = [];
-      if (video.src && !video.src.startsWith('blob:')) { const a = getAbsoluteUrl(video.src); if (a) sources.push(a); }
-      if (video.currentSrc && !video.currentSrc.startsWith('blob:')) { const a = getAbsoluteUrl(video.currentSrc); if (a && !sources.includes(a)) sources.push(a); }
-      video.querySelectorAll('source').forEach(s => {
-        const src = s.src || s.getAttribute('src');
-        if (src && !src.startsWith('blob:')) { const a = getAbsoluteUrl(src); if (a && !sources.includes(a)) sources.push(a); }
-      });
-      const poster = getAbsoluteUrl(video.poster) || '';
-      if (sources.length > 0) {
-        mediaItems.push({
-          id: `media_${idCounter++}`, type: 'video', thumbnail: poster,
-          title: getFilenameFromUrl(sources[0]) || undefined,
-          variants: sources.map((s, i) => ({ url: s, label: sources.length > 1 ? `Source ${i + 1}` : "Vidéo" }))
-        });
-      }
-    });
-
-    // 3. Scan Audio
-    document.querySelectorAll('audio').forEach((audio: HTMLAudioElement) => {
-      const sources: string[] = [];
-      if (audio.src && !audio.src.startsWith('blob:')) { const a = getAbsoluteUrl(audio.src); if (a) sources.push(a); }
-      if (audio.currentSrc && !audio.currentSrc.startsWith('blob:')) { const a = getAbsoluteUrl(audio.currentSrc); if (a && !sources.includes(a)) sources.push(a); }
-      audio.querySelectorAll('source').forEach(s => {
-        const src = s.src || s.getAttribute('src');
-        if (src && !src.startsWith('blob:')) { const a = getAbsoluteUrl(src); if (a && !sources.includes(a)) sources.push(a); }
-      });
-      if (sources.length > 0) {
-        mediaItems.push({
-          id: `media_${idCounter++}`, type: 'audio', thumbnail: '',
-          title: getFilenameFromUrl(sources[0]) || undefined,
-          variants: sources.map((s, i) => ({ url: s, label: sources.length > 1 ? `Source ${i + 1}` : "Audio" }))
-        });
-      }
-    });
-
-    // 4. Scan links for video/audio/document files
-    document.querySelectorAll('a[href]').forEach((el: Element) => {
-      const link = el as HTMLAnchorElement;
-      const href = link.getAttribute('href');
-      if (!href) return;
-      const absUrl = getAbsoluteUrl(href);
-      if (!absUrl || !absUrl.startsWith('http')) return;
-      const ext = getFileExtension(absUrl);
-      if (!ext) return;
-      const filename = getFilenameFromUrl(absUrl) || link.textContent?.trim() || 'Fichier';
-
-      if (videoExtensions.includes(ext)) {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'video', thumbnail: '', title: filename, variants: [{ url: absUrl, label: `Vidéo (${ext.slice(1).toUpperCase()})` }] });
-      } else if (audioExtensions.includes(ext)) {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'audio', thumbnail: '', title: filename, variants: [{ url: absUrl, label: `Audio (${ext.slice(1).toUpperCase()})` }] });
-      } else if (documentExtensions.includes(ext)) {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'document', thumbnail: '', title: filename, variants: [{ url: absUrl, label: `Fichier (${ext.slice(1).toUpperCase()})` }] });
-      }
-    });
-
-    // 5. Scan embed/object/iframe
-    document.querySelectorAll('embed[src], object[data], iframe[src]').forEach(el => {
-      const src = el.getAttribute('src') || el.getAttribute('data');
-      if (!src || src.startsWith('blob:')) return;
-      const absUrl = getAbsoluteUrl(src);
-      if (!absUrl || !absUrl.startsWith('http')) return;
-      const ext = getFileExtension(absUrl);
-      if (videoExtensions.includes(ext)) {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'video', thumbnail: '', title: getFilenameFromUrl(absUrl), variants: [{ url: absUrl, label: 'Vidéo intégrée' }] });
-      } else if (audioExtensions.includes(ext)) {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'audio', thumbnail: '', title: getFilenameFromUrl(absUrl), variants: [{ url: absUrl, label: 'Audio intégré' }] });
-      } else if (ext === '.pdf') {
-        mediaItems.push({ id: `media_${idCounter++}`, type: 'document', thumbnail: '', title: getFilenameFromUrl(absUrl) || 'PDF', variants: [{ url: absUrl, label: 'PDF intégré' }] });
-      }
-    });
-
-    // 6. Scan CSS background-images
-    document.querySelectorAll('*').forEach(el => {
-      const bg = window.getComputedStyle(el).backgroundImage;
-      if (bg && bg !== 'none') {
-        const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/);
-        if (match?.[1]) {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 80 && rect.height > 80) {
-            mediaItems.push({ id: `media_${idCounter++}`, type: 'image', thumbnail: match[1], variants: [{ url: match[1], label: "Background Image" }] });
-          }
-        }
-      }
-    });
-
-    // Deduplicate
-    const seen = new Map<string, MediaItem>();
-    mediaItems.forEach(item => {
-      const key = item.variants[0]?.url || item.thumbnail;
-      if (!seen.has(key)) seen.set(key, item);
-    });
-
-    const finalItems = Array.from(seen.values());
-    console.log(`Media Downloader Pro: ${finalItems.length} media items detected.`);
-    sendResponse({ images: finalItems });
   }
+
+  // --- 1. Images ---
+  document.querySelectorAll('img').forEach((img) => {
+    const src = abs((img as HTMLImageElement).currentSrc || (img as HTMLImageElement).src);
+    if (!isHttp(src)) return;
+
+    const rawVariants: { url: string; width?: number }[] = [{ url: src }];
+    if ((img as HTMLImageElement).srcset) rawVariants.push(...parseSrcset((img as HTMLImageElement).srcset));
+    const picture = img.closest('picture');
+    if (picture) {
+      picture.querySelectorAll('source').forEach(s => {
+        if (s.srcset) rawVariants.push(...parseSrcset(s.srcset));
+      });
+    }
+
+    // Deduplicate variants
+    const map = new Map<string, { url: string; width?: number }>();
+    rawVariants.forEach(v => { if (!map.has(v.url)) map.set(v.url, v); });
+    const variants = Array.from(map.values())
+      .sort((a, b) => (b.width || 0) - (a.width || 0))
+      .map((v, i, arr) => ({
+        url: v.url,
+        width: v.width,
+        label: v.width ? `${v.width}w${i === 0 && arr.length > 1 ? ' (Max)' : ''}` : (arr.length > 1 && i === arr.length - 1 ? 'Base' : 'Original'),
+      }));
+
+    if (!seenUrls.has(src)) {
+      seenUrls.add(src);
+      items.push({ id: `m_${id++}`, type: 'image', thumbnail: src, variants });
+    }
+  });
+
+  // --- 2. CSS background-images ---
+  document.querySelectorAll('div, section, article, header, figure, span, a').forEach(el => {
+    try {
+      const bg = getComputedStyle(el).backgroundImage;
+      if (!bg || bg === 'none') return;
+      const m = bg.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/);
+      if (!m) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 60 && rect.height > 60) {
+        addItem('image', m[1], m[1]);
+      }
+    } catch { /* skip */ }
+  });
+
+  // --- 3. Videos ---
+  document.querySelectorAll('video').forEach((video) => {
+    const v = video as HTMLVideoElement;
+    const poster = abs(v.poster) || '';
+    const sources: string[] = [];
+
+    // Direct src
+    const vSrc = v.currentSrc || v.src;
+    if (vSrc && !vSrc.startsWith('blob:') && isHttp(abs(vSrc))) sources.push(abs(vSrc)!);
+    // <source> children
+    v.querySelectorAll('source').forEach(s => {
+      const u = abs(s.src || s.getAttribute('src'));
+      if (u && !u.startsWith('blob:') && isHttp(u) && !sources.includes(u)) sources.push(u);
+    });
+
+    if (sources.length > 0) {
+      const variants = sources.map((s, i) => ({ url: s, label: sources.length > 1 ? `Source ${i + 1}` : 'Vidéo' }));
+      addItem('video', sources[0], poster, getFilename(sources[0]) || undefined, variants);
+    }
+  });
+
+  // --- 4. Audio ---
+  document.querySelectorAll('audio').forEach((audio) => {
+    const a = audio as HTMLAudioElement;
+    const sources: string[] = [];
+    const aSrc = a.currentSrc || a.src;
+    if (aSrc && !aSrc.startsWith('blob:') && isHttp(abs(aSrc))) sources.push(abs(aSrc)!);
+    a.querySelectorAll('source').forEach(s => {
+      const u = abs(s.src || s.getAttribute('src'));
+      if (u && !u.startsWith('blob:') && isHttp(u) && !sources.includes(u)) sources.push(u);
+    });
+    if (sources.length > 0) {
+      const variants = sources.map((s, i) => ({ url: s, label: sources.length > 1 ? `Source ${i + 1}` : 'Audio' }));
+      addItem('audio', sources[0], '', getFilename(sources[0]) || undefined, variants);
+    }
+  });
+
+  // --- 5. Links (<a href>) to media files ---
+  document.querySelectorAll('a[href]').forEach(el => {
+    const href = (el as HTMLAnchorElement).href;
+    const url = abs(href);
+    if (!isHttp(url)) return;
+    const ext = getExt(url);
+    if (!ext) return;
+
+    const title = (el as HTMLAnchorElement).textContent?.trim() || getFilename(url) || '';
+
+    if (VIDEO_EXT.has(ext)) addItem('video', url, '', title);
+    else if (AUDIO_EXT.has(ext)) addItem('audio', url, '', title);
+    else if (DOC_EXT.has(ext)) addItem('document', url, '', title);
+  });
+
+  // --- 6. Embedded media (embed, object, iframe) ---
+  document.querySelectorAll('embed[src], object[data], iframe[src]').forEach(el => {
+    const src = abs(el.getAttribute('src') || el.getAttribute('data'));
+    if (!isHttp(src)) return;
+    const ext = getExt(src);
+    if (VIDEO_EXT.has(ext)) addItem('video', src, '', getFilename(src));
+    else if (AUDIO_EXT.has(ext)) addItem('audio', src, '', getFilename(src));
+    else if (ext === '.pdf') addItem('document', src, '', getFilename(src) || 'PDF');
+  });
+
+  // --- 7. data-src, data-video-src and other common data attributes ---
+  const dataAttrs = ['data-src', 'data-video-src', 'data-audio-src', 'data-url', 'data-href', 'data-mp4', 'data-webm'];
+  document.querySelectorAll('[data-src], [data-video-src], [data-audio-src], [data-url], [data-href], [data-mp4], [data-webm]').forEach(el => {
+    for (const attr of dataAttrs) {
+      const val = el.getAttribute(attr);
+      const url = abs(val);
+      if (!isHttp(url)) continue;
+      const ext = getExt(url);
+      if (VIDEO_EXT.has(ext)) addItem('video', url, '', getFilename(url));
+      else if (AUDIO_EXT.has(ext)) addItem('audio', url, '', getFilename(url));
+      else if (DOC_EXT.has(ext)) addItem('document', url, '', getFilename(url));
+      else {
+        // Check if URL looks like image
+        const imgExt = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif', '.bmp']);
+        if (imgExt.has(ext)) addItem('image', url, url);
+      }
+    }
+  });
+
+  console.log(`MDP: Detected ${items.length} media items.`);
+  sendResponse({ images: items });
   return true;
 });
 
 
-// ==========================================================
-// ON-PAGE FLOATING DOWNLOAD BUTTON
-// ==========================================================
+// ============================================================
+// ON-PAGE FLOATING "MDP" DOWNLOAD BUTTON
+// ============================================================
 
 let activeMediaUrl = "";
 
-/** Walk up to 6 levels to find img/video/audio (handles player overlays). */
-function findMediaEl(el: HTMLElement | null): HTMLElement | null {
+function findMedia(el: HTMLElement | null): HTMLElement | null {
   let cur = el;
-  for (let i = 0; i < 6 && cur; i++) {
-    if (cur.tagName === 'IMG' || cur.tagName === 'VIDEO' || cur.tagName === 'AUDIO') return cur;
-    const child = cur.querySelector(':scope > video, :scope > audio') as HTMLElement | null;
-    if (child) return child;
+  for (let depth = 0; depth < 8 && cur; depth++) {
+    const tag = cur.tagName;
+    if (tag === 'IMG' || tag === 'VIDEO' || tag === 'AUDIO') return cur;
+    // Check for direct media child
+    const child = cur.querySelector(':scope > video, :scope > audio, :scope > img') as HTMLElement | null;
+    if (child) {
+      const rect = child.getBoundingClientRect();
+      if (rect.width > 30 && rect.height > 30) return child;
+    }
     cur = cur.parentElement;
   }
   return null;
 }
 
-/** Extract a downloadable URL from the media element. */
-function extractSrc(el: HTMLElement): string | null {
-  if (el.tagName === 'IMG') {
-    return (el as HTMLImageElement).currentSrc || (el as HTMLImageElement).src || null;
+function extractUrl(el: HTMLElement): string | null {
+  const tag = el.tagName;
+  if (tag === 'IMG') {
+    const img = el as HTMLImageElement;
+    return img.currentSrc || img.src || null;
   }
-  if (el.tagName === 'VIDEO') {
+  if (tag === 'VIDEO') {
     const v = el as HTMLVideoElement;
+    // Prefer non-blob source
     if (v.currentSrc && !v.currentSrc.startsWith('blob:')) return v.currentSrc;
     if (v.src && !v.src.startsWith('blob:')) return v.src;
     for (const s of v.querySelectorAll('source')) {
       const u = s.src || s.getAttribute('src');
       if (u && !u.startsWith('blob:')) return u;
     }
-    if (v.poster) return v.poster; // fallback: at least download the poster
-    return null;
+    // Fallback: poster image
+    return v.poster || null;
   }
-  if (el.tagName === 'AUDIO') {
+  if (tag === 'AUDIO') {
     const a = el as HTMLAudioElement;
     if (a.currentSrc && !a.currentSrc.startsWith('blob:')) return a.currentSrc;
     if (a.src && !a.src.startsWith('blob:')) return a.src;
@@ -275,135 +287,146 @@ function extractSrc(el: HTMLElement): string | null {
   return null;
 }
 
-// -- Build the button (plain DOM, no Shadow DOM, all !important to resist site CSS) --
-
+// -- Build the floating button --
 const mdpBtn = document.createElement("div");
-mdpBtn.id = "mdp-quick-download-btn";
+mdpBtn.id = "mdp-quick-dl";
 
-const BASE_STYLE = `
-  position: fixed !important;
-  z-index: 2147483647 !important;
-  display: none;
-  align-items: center;
-  gap: 7px;
-  background: linear-gradient(135deg, #007AFF 0%, #0055D4 100%) !important;
-  color: white !important;
-  border: 2px solid rgba(255,255,255,0.45) !important;
-  border-radius: 12px !important;
-  padding: 10px 16px !important;
-  cursor: pointer !important;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif !important;
-  font-size: 13px !important;
-  font-weight: 800 !important;
-  letter-spacing: 0.4px !important;
-  box-shadow: 0 4px 24px rgba(0,122,255,0.55), 0 0 0 1px rgba(0,122,255,0.3), inset 0 1px 0 rgba(255,255,255,0.15) !important;
-  pointer-events: auto !important;
-  user-select: none !important;
-  -webkit-user-select: none !important;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.25) !important;
-  line-height: 1 !important;
-  white-space: nowrap !important;
-  transition: transform 0.12s ease, box-shadow 0.12s ease !important;
-  margin: 0 !important;
-  text-decoration: none !important;
-  text-transform: none !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  overflow: visible !important;
-  text-align: left !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  min-height: 0 !important;
-  max-height: none !important;
-  width: auto !important;
-  height: auto !important;
-  float: none !important;
-  top: 0; left: 0;
-`.trim();
+const STYLE = [
+  "position:fixed",
+  "z-index:2147483647",
+  "display:none",
+  "align-items:center",
+  "gap:7px",
+  "background:linear-gradient(135deg,#007AFF 0%,#0055D4 100%)",
+  "color:#fff",
+  "border:2px solid rgba(255,255,255,0.45)",
+  "border-radius:12px",
+  "padding:10px 16px",
+  "cursor:pointer",
+  "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
+  "font-size:13px",
+  "font-weight:800",
+  "letter-spacing:0.4px",
+  "box-shadow:0 4px 24px rgba(0,122,255,0.55),0 0 0 1px rgba(0,122,255,0.3),inset 0 1px 0 rgba(255,255,255,0.15)",
+  "pointer-events:auto",
+  "user-select:none",
+  "text-shadow:0 1px 2px rgba(0,0,0,0.25)",
+  "line-height:1",
+  "white-space:nowrap",
+  "transition:transform 0.12s ease",
+  "margin:0",
+  "opacity:1",
+  "visibility:visible",
+].map(s => s + " !important").join(";");
 
-const DL_SVG = '<svg style="flex-shrink:0;display:inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-const OK_SVG = '<svg style="flex-shrink:0;display:inline-block" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-const LABEL = '<span style="color:white!important;font-weight:800!important;font-size:13px!important;line-height:1!important;font-family:inherit!important">⬇ MDP</span>';
+const DL_ICON = '<svg style="flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+const OK_ICON = '<svg style="flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const BTN_LABEL = '<span style="color:#fff!important;font-weight:800!important;font-size:13px!important;font-family:inherit!important">⬇ MDP</span>';
 
-function resetMdpBtn() {
-  mdpBtn.setAttribute("style", BASE_STYLE);
-  mdpBtn.innerHTML = DL_SVG + LABEL;
+function resetBtn() {
+  mdpBtn.setAttribute("style", STYLE);
+  mdpBtn.innerHTML = DL_ICON + BTN_LABEL;
 }
-resetMdpBtn();
+resetBtn();
+
+// Append to <html> (not <body>) so it exists even on pages without body
 document.documentElement.appendChild(mdpBtn);
 
-function fallbackDownload(url: string) {
+// -- Download handler --
+function triggerDownload(url: string) {
+  // Capture url locally so async callbacks use the right value
+  const downloadUrl = url;
+  console.log("MDP: Requesting download for:", downloadUrl);
+
   try {
+    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [downloadUrl] }, (resp) => {
+      if (chrome.runtime.lastError) {
+        console.warn("MDP: sendMessage failed, trying fallback:", chrome.runtime.lastError.message);
+        // Fallback: ask background to open in new tab
+        try {
+          chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url: downloadUrl });
+        } catch {
+          // Last resort: create <a> tag
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = getFilename(downloadUrl) || 'download';
+          a.target = '_blank';
+          a.rel = 'noopener';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => a.remove(), 100);
+        }
+        return;
+      }
+      if (resp && resp.failed && resp.failed > 0) {
+        console.warn("MDP: Some downloads failed via API, trying tab fallback");
+        chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url: downloadUrl });
+      }
+    });
+  } catch (err) {
+    console.error("MDP: runtime error, last resort download:", err);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = getFilenameFromUrl(url) || 'download';
+    a.href = downloadUrl;
+    a.download = getFilename(downloadUrl) || 'download';
+    a.target = '_blank';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-  } catch (err) {
-    console.error("MDP fallback download failed:", err);
+    setTimeout(() => a.remove(), 100);
   }
 }
 
-// -- Click handler: download the media --
-
-mdpBtn.addEventListener("mousedown", function (e: MouseEvent) {
+// -- Mouse event: click on the MDP button --
+mdpBtn.addEventListener("mousedown", (e) => {
   e.preventDefault();
   e.stopPropagation();
   e.stopImmediatePropagation();
 
   if (!activeMediaUrl) return;
 
-  // Send download request
-  try {
-    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [activeMediaUrl] }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.warn("MDP: background script unreachable, using fallback.", chrome.runtime.lastError.message);
-        fallbackDownload(activeMediaUrl);
-      } else if (response && response.error) {
-        console.warn("MDP: background download failed, using fallback.", response.error);
-        fallbackDownload(activeMediaUrl);
-      }
-    });
-  } catch (err) {
-    console.warn("MDP: chrome.runtime.sendMessage error, using fallback:", err);
-    fallbackDownload(activeMediaUrl);
-  }
+  // Trigger download
+  triggerDownload(activeMediaUrl);
 
-  // Visual success
-  mdpBtn.setAttribute("style", BASE_STYLE
-    .replace(/background:[^!]+!important/, "background: linear-gradient(135deg, #34C759 0%, #248A3D 100%) !important")
-    .replace(/box-shadow:[^!]+!important/, "box-shadow: 0 4px 24px rgba(52,199,89,0.6), 0 2px 8px rgba(0,0,0,0.2) !important")
-    .replace("display: none", "display: flex")
+  // Visual feedback: green success
+  const currentTop = mdpBtn.style.top;
+  const currentLeft = mdpBtn.style.left;
+  mdpBtn.setAttribute("style",
+    STYLE
+      .replace(/background:[^!]+!important/, "background:linear-gradient(135deg,#34C759 0%,#248A3D 100%) !important")
+      .replace(/box-shadow:[^!]+!important/, "box-shadow:0 4px 24px rgba(52,199,89,0.6),0 2px 8px rgba(0,0,0,0.2) !important")
+      .replace("display:none", "display:flex")
   );
-  mdpBtn.style.top = mdpBtn.style.top; // keep position
-  mdpBtn.style.left = mdpBtn.style.left;
-  mdpBtn.innerHTML = OK_SVG + '<span style="color:white!important;font-weight:800!important;font-size:13px!important;line-height:1!important;font-family:inherit!important">✓ Téléchargé !</span>';
-  mdpBtn.style.transform = "scale(1.08)";
+  mdpBtn.style.top = currentTop;
+  mdpBtn.style.left = currentLeft;
+  mdpBtn.innerHTML = OK_ICON + '<span style="color:#fff!important;font-weight:800!important;font-size:13px!important;font-family:inherit!important">✓ Téléchargé !</span>';
 
   setTimeout(() => {
     mdpBtn.style.display = "none";
-    setTimeout(resetMdpBtn, 300);
-  }, 1000);
+    setTimeout(resetBtn, 200);
+  }, 1200);
 }, true);
 
-mdpBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }, true);
+// Block click propagation
+mdpBtn.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+}, true);
 
 // -- Hover logic --
-
 let hideTimer: number | undefined;
 
-function showMdpBtn(mediaEl: HTMLElement) {
+function showBtn(mediaEl: HTMLElement) {
   const rect = mediaEl.getBoundingClientRect();
-  if (rect.width < 50 || rect.height < 50) return; // skip tiny icons
+  if (rect.width < 50 || rect.height < 50) return;
 
   clearTimeout(hideTimer);
   mdpBtn.style.display = "flex";
 
+  // Position top-right
   let top = rect.top + 8;
   let left = rect.right - 140;
-  // Clamp inside viewport
   if (top < 4) top = 4;
   if (left < 4) left = 4;
   if (top > window.innerHeight - 50) top = window.innerHeight - 50;
@@ -416,22 +439,21 @@ function showMdpBtn(mediaEl: HTMLElement) {
 document.addEventListener("mouseover", (e) => {
   const target = e.target as HTMLElement;
 
-  // Don't hide when hovering our own button
+  // Ignore our own button
   if (target === mdpBtn || mdpBtn.contains(target)) {
     clearTimeout(hideTimer);
     return;
   }
 
-  // Find the closest media element (walks up the DOM for video player overlays)
-  const media = findMediaEl(target);
+  const media = findMedia(target);
   if (media) {
-    const rawSrc = extractSrc(media);
-    if (!rawSrc) return;
-    const url = getAbsoluteUrl(rawSrc);
-    if (!url || !url.startsWith("http")) return;
+    const rawUrl = extractUrl(media);
+    if (!rawUrl) return;
+    const url = abs(rawUrl);
+    if (!isHttp(url)) return;
 
     activeMediaUrl = url;
-    showMdpBtn(media);
+    showBtn(media);
   } else {
     hideTimer = window.setTimeout(() => { mdpBtn.style.display = "none"; }, 400);
   }

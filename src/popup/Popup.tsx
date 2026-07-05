@@ -61,26 +61,26 @@ export default function Popup() {
     }
   };
 
-  const fallbackDownload = (url: string) => {
-    try {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = url.split('/').pop()?.split('?')[0] || 'download';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (err) {
-      console.error("MDP fallback download failed:", err);
-    }
-  };
-
   const downloadUrls = (urls: string[]) => {
-    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls }, (response) => {
-      if (chrome.runtime.lastError || (response && response.error)) {
-        console.warn("MDP: Using fallback download.");
-        urls.forEach(fallbackDownload);
-      }
+    urls.forEach(url => {
+      let filename: string | undefined;
+      try {
+        const seg = new URL(url).pathname.split('/').pop();
+        if (seg && seg.includes('.')) filename = decodeURIComponent(seg.split('?')[0]);
+      } catch { /* ignore */ }
+
+      chrome.downloads.download({
+        url,
+        filename,
+        conflictAction: "uniquify",
+      }, (downloadId) => {
+        if (chrome.runtime.lastError) {
+          console.warn("MDP popup: direct download failed, trying via background:", chrome.runtime.lastError.message);
+          chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [url] });
+        } else {
+          console.log("MDP popup: download started, ID:", downloadId);
+        }
+      });
     });
   };
 
