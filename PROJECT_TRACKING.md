@@ -11,6 +11,16 @@ This document serves as a persistent record of all completed steps, architectura
 - **Bugfix (CSS Compilation):** Fixed a critical build error where Tailwind CSS v4 was installed but the Vite plugin (`@tailwindcss/vite`) was missing. The browser was ignoring all classes. The styles (Apple UI, animations, lightbox constraints) now compile and render flawlessly.
 - **Git Commit:** Committed with message `fix: resolve tailwind css v4 compilation issue in vite build`.
 
+## [Phase 3.0] - 2026-07-05 - Deep Media Detection (Network + Performance API)
+**Status: Completed**
+
+- **Network Interception (`chrome.webRequest`):** The background service worker now intercepts ALL network responses and classifies them by Content-Type MIME header and file extension. This captures media loaded dynamically by JavaScript, streaming segments, and API-fetched content that never appears in the DOM.
+- **Performance API (`performance.getEntriesByType`):** The content script now scans all resources already loaded by the browser (via the Resource Timing API) and classifies them by `initiatorType` and extension.
+- **MDP Button Extended:** The floating download button now appears on **all** media types: images, videos, audios, document links (`<a href="file.pdf">`), embedded elements (`<embed>`, `<object>`, `<iframe>`), and elements with `data-src` attributes.
+- **Smart Positioning:** For small elements like text links, the button positions to the right of the element instead of overlapping it.
+- **Permissions:** Added `webRequest` and `host_permissions: ["<all_urls>"]` to the manifest.
+- **Git Commit:** Committed with message `feat: add network interception (webRequest) and Performance API for deep media detection`.
+
 ## [Hotfix] - 2026-07-05 - Reliable Download Fallback
 **Status: Completed**
 
