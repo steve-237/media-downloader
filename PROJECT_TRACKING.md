@@ -11,6 +11,13 @@ This document serves as a persistent record of all completed steps, architectura
 - **Bugfix (CSS Compilation):** Fixed a critical build error where Tailwind CSS v4 was installed but the Vite plugin (`@tailwindcss/vite`) was missing. The browser was ignoring all classes. The styles (Apple UI, animations, lightbox constraints) now compile and render flawlessly.
 - **Git Commit:** Committed with message `fix: resolve tailwind css v4 compilation issue in vite build`.
 
+## [Hotfix] - 2026-07-05 - Reliable Download Fallback
+**Status: Completed**
+
+- **Download Fallback:** Implemented a robust fallback mechanism in both the content script and popup. If `chrome.downloads.download` fails (due to permissions, context issues, or unhandled blob URLs), the system automatically creates a hidden `<a download>` tag and triggers a programmatic click to force the browser to download the file directly from the webpage's context.
+- **Service Worker Error Handling:** The background script now properly catches `chrome.runtime.lastError` from the downloads API and passes the error back to the sender so the fallback can be engaged.
+- **Git Commit:** Committed with message `fix: implement fallback download mechanism if chrome.downloads API fails`.
+
 ## [Phase 2.1] - 2026-07-05 - Enhanced Detection & Visible On-Page Button
 **Status: Completed**
 

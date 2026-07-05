@@ -332,6 +332,20 @@ function resetMdpBtn() {
 resetMdpBtn();
 document.documentElement.appendChild(mdpBtn);
 
+function fallbackDownload(url: string) {
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = getFilenameFromUrl(url) || 'download';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.error("MDP fallback download failed:", err);
+  }
+}
+
 // -- Click handler: download the media --
 
 mdpBtn.addEventListener("mousedown", function (e: MouseEvent) {
@@ -343,13 +357,18 @@ mdpBtn.addEventListener("mousedown", function (e: MouseEvent) {
 
   // Send download request
   try {
-    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [activeMediaUrl] }, () => {
+    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [activeMediaUrl] }, (response) => {
       if (chrome.runtime.lastError) {
-        console.warn("MDP: download send failed:", chrome.runtime.lastError.message);
+        console.warn("MDP: background script unreachable, using fallback.", chrome.runtime.lastError.message);
+        fallbackDownload(activeMediaUrl);
+      } else if (response && response.error) {
+        console.warn("MDP: background download failed, using fallback.", response.error);
+        fallbackDownload(activeMediaUrl);
       }
     });
   } catch (err) {
-    console.warn("MDP: chrome.runtime.sendMessage error:", err);
+    console.warn("MDP: chrome.runtime.sendMessage error, using fallback:", err);
+    fallbackDownload(activeMediaUrl);
   }
 
   // Visual success

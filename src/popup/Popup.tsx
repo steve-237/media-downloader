@@ -61,8 +61,27 @@ export default function Popup() {
     }
   };
 
+  const fallbackDownload = (url: string) => {
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = url.split('/').pop()?.split('?')[0] || 'download';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error("MDP fallback download failed:", err);
+    }
+  };
+
   const downloadUrls = (urls: string[]) => {
-    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls });
+    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls }, (response) => {
+      if (chrome.runtime.lastError || (response && response.error)) {
+        console.warn("MDP: Using fallback download.");
+        urls.forEach(fallbackDownload);
+      }
+    });
   };
 
   const handleDownloadSelected = () => {
