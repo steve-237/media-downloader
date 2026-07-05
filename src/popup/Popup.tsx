@@ -27,17 +27,61 @@ export default function Popup() {
   useEffect(() => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs: chrome.tabs.Tab[]) => {
       const activeTab = tabs[0];
-      if (activeTab && activeTab.id) {
-        chrome.tabs.sendMessage(activeTab.id, { action: "SCAN_MEDIA" }, (response: any) => {
-          if (chrome.runtime.lastError) {
-            console.warn("Could not connect to content script. Please refresh the page.");
-            return;
-          }
-          if (response && response.images) {
-            setImages(response.images);
-          }
+      if (!activeTab || !activeTab.id) return;
+
+      const tabId = activeTab.id;
+      let domMedia: MediaItem[] = [];
+      let netMedia: MediaItem[] = [];
+
+      const updateImages = () => {
+        const all = [...domMedia, ...netMedia];
+        // Deduplicate by URL
+        const seen = new Set<string>();
+        const unique = all.filter(item => {
+          const url = item.variants?.[0]?.url || item.thumbnail;
+          if (seen.has(url)) return false;
+          seen.add(url);
+          return true;
         });
-      }
+        setImages(unique);
+      };
+
+      // 1. Fetch DOM & Performance media from content script
+      chrome.tabs.sendMessage(tabId, { action: "SCAN_MEDIA" }, (response: any) => {
+        if (chrome.runtime.lastError) {
+          console.warn("MDP: Content script not responding.", chrome.runtime.lastError.message);
+        } else if (response && response.images) {
+          domMedia = response.images;
+          updateImages();
+        }
+      });
+
+      // 2. Fetch network-intercepted media from background script
+      chrome.runtime.sendMessage({ action: "GET_NETWORK_MEDIA", tabId }, (response: any) => {
+        if (chrome.runtime.lastError) {
+          console.warn("MDP: Background script not responding.", chrome.runtime.lastError.message);
+        } else if (response && response.media) {
+          let idCounter = 1000; // avoid id collisions
+          netMedia = response.media
+            .filter((nm: any) => nm.type !== 'image') // Skip tiny network images
+            .map((nm: any) => {
+              let label = nm.type === 'video' ? 'Vidéo' : nm.type === 'audio' ? 'Audio' : 'Fichier';
+              if (nm.size && nm.size > 0) {
+                label += ` (${(nm.size / (1024 * 1024)).toFixed(1)} MB)`;
+              }
+              const title = nm.filename || nm.url.split('/').pop()?.split('?')[0] || undefined;
+              return {
+                id: `net_${idCounter++}`,
+                type: nm.type,
+                thumbnail: '',
+                title: title ? decodeURIComponent(title) : undefined,
+                variants: [{ url: nm.url, label: `${label} (Réseau)` }]
+              };
+            });
+          updateImages();
+        }
+      });
+
     });
   }, []);
 
