@@ -14,7 +14,11 @@ const manifest = defineManifest({
   permissions: [
     "activeTab",
     "scripting",
-    "downloads"
+    "downloads",
+    "webRequest"
+  ],
+  host_permissions: [
+    "<all_urls>"
   ],
   background: {
     service_worker: "src/background/index.ts",

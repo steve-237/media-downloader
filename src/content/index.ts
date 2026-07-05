@@ -221,16 +221,72 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       else if (AUDIO_EXT.has(ext)) addItem('audio', url, '', getFilename(url));
       else if (DOC_EXT.has(ext)) addItem('document', url, '', getFilename(url));
       else {
-        // Check if URL looks like image
         const imgExt = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.avif', '.bmp']);
         if (imgExt.has(ext)) addItem('image', url, url);
       }
     }
   });
 
-  console.log(`MDP: Detected ${items.length} media items.`);
-  sendResponse({ images: items });
-  return true;
+  // --- 8. Performance API: scan all resources already loaded by the browser ---
+  try {
+    const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+    for (const entry of entries) {
+      const url = entry.name;
+      if (!isHttp(url)) continue;
+      if (url.startsWith('chrome-extension://')) continue;
+
+      const ext = getExt(url);
+      const initiatorType = entry.initiatorType; // 'img', 'video', 'audio', 'xmlhttprequest', 'fetch', etc.
+
+      // Classify by initiator type first, then by extension
+      if (initiatorType === 'video' || VIDEO_EXT.has(ext)) {
+        addItem('video', url, '', getFilename(url));
+      } else if (initiatorType === 'audio' || AUDIO_EXT.has(ext)) {
+        addItem('audio', url, '', getFilename(url));
+      } else if (DOC_EXT.has(ext)) {
+        addItem('document', url, '', getFilename(url));
+      }
+      // Skip images from Performance API to avoid duplicates with DOM scan
+    }
+  } catch (e) {
+    console.warn("MDP: Performance API scan failed:", e);
+  }
+
+  // --- 9. Ask background script for network-intercepted media ---
+  // This is async, so we handle it with a nested message
+  try {
+    chrome.runtime.sendMessage({ action: "GET_NETWORK_MEDIA" }, (resp) => {
+      if (chrome.runtime.lastError || !resp || !resp.media) {
+        console.log(`MDP: Detected ${items.length} media items (DOM + Performance).`);
+        sendResponse({ images: items });
+        return;
+      }
+
+      const networkMedia = resp.media as Array<{ url: string; type: string; filename?: string; size?: number }>;
+      for (const nm of networkMedia) {
+        if (!isHttp(nm.url)) continue;
+        const type = nm.type as MediaType;
+        if (type === 'image') continue; // Skip network images (too many tiny ones, DOM scan is better)
+        
+        let label = type === 'video' ? 'Vidéo' : type === 'audio' ? 'Audio' : 'Fichier';
+        if (nm.size && nm.size > 0) {
+          const sizeMB = (nm.size / (1024 * 1024)).toFixed(1);
+          label += ` (${sizeMB} MB)`;
+        }
+        
+        const title = nm.filename || getFilename(nm.url) || undefined;
+        addItem(type, nm.url, '', title, [{ url: nm.url, label }]);
+      }
+
+      console.log(`MDP: Detected ${items.length} media items (DOM + Performance + Network).`);
+      sendResponse({ images: items });
+    });
+  } catch {
+    console.log(`MDP: Detected ${items.length} media items (DOM + Performance, network failed).`);
+    sendResponse({ images: items });
+  }
+
+  return true; // Keep message channel open for async sendResponse
 });
 
 
