@@ -11,6 +11,14 @@ This document serves as a persistent record of all completed steps, architectura
 - **Bugfix (CSS Compilation):** Fixed a critical build error where Tailwind CSS v4 was installed but the Vite plugin (`@tailwindcss/vite`) was missing. The browser was ignoring all classes. The styles (Apple UI, animations, lightbox constraints) now compile and render flawlessly.
 - **Git Commit:** Committed with message `fix: resolve tailwind css v4 compilation issue in vite build`.
 
+## [Phase 2.1] - 2026-07-05 - Enhanced Detection & Visible On-Page Button
+**Status: Completed**
+
+- **Extended Detection:** Added scanning of `<a href>` links for video/audio file extensions (`.mp4`, `.webm`, `.mp3`, `.wav`, etc.), `<embed>`, `<object>`, `<iframe>` sources, and CSS `background-image` URLs.
+- **Blob URL Filtering:** Skip `blob:` URLs that are not directly downloadable (streaming/DRM content).
+- **On-Page Button Redesign:** Completely redesigned the floating download button using Shadow DOM for style isolation. Now features a blue gradient background, pulsing glow animation, slide-in entrance, larger text ("⬇ MDP"), and a green "Téléchargé !" success state.
+- **Git Commit:** Committed with message `fix: improve media detection coverage and make on-page download button much more visible`.
+
 ## [Phase 2.0] - 2026-07-05 - Multi-Media Detection & On-Page Download
 **Status: Completed**
 
