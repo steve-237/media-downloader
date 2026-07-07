@@ -163,6 +163,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (sources.length > 0) {
       const variants = sources.map((s, i) => ({ url: s, label: sources.length > 1 ? `Source ${i + 1}` : 'Vidéo' }));
       addItem('video', sources[0], poster, getFilename(sources[0]) || undefined, variants);
+    } else if (vSrc && vSrc.startsWith('blob:')) {
+      addItem('video', 'BLOB_VIDEO', poster, 'Vidéo Protégée (Blob)', [{ url: 'BLOB_VIDEO', label: 'Détecter la source' }]);
     }
   });
 
@@ -448,8 +450,16 @@ mdpBtn.addEventListener('click', (e) => {
         }
         if (resp && resp.error) {
           console.warn("MDP: No network video found:", resp.error);
-          // Fallback: try to open the page URL in a new tab
-          alert("MDP: Aucune vidéo directe trouvée. La vidéo est protégée par du streaming (blob). Essayez de laisser la vidéo jouer un peu puis réessayez.");
+          
+          // Show visual error instead of alert()
+          const errorMsg = document.createElement('div');
+          errorMsg.textContent = `MDP: Impossible de télécharger (Flux protégé). Laissez la vidéo jouer un peu.`;
+          errorMsg.style.cssText = 'position:fixed; z-index:2147483647; top:20px; right:20px; background:#FF3B30; color:white; padding:12px 16px; border-radius:8px; font-family:sans-serif; font-size:14px; font-weight:bold; box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+          document.body.appendChild(errorMsg);
+          setTimeout(() => errorMsg.remove(), 4000);
+          
+          mdpBtn.innerHTML = DL_HTML;
+          mdpBtn.classList.remove('success');
         } else {
           console.log("MDP: Network video download started");
         }
@@ -474,7 +484,6 @@ mdpBtn.addEventListener('click', (e) => {
 
 // Prevent mousedown from bubbling to the page (avoids pausing video etc.)
 mdpBtn.addEventListener('mousedown', (e) => {
-  e.preventDefault();
   e.stopPropagation();
   e.stopImmediatePropagation();
 }, true);

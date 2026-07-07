@@ -127,6 +127,26 @@ export default function Popup() {
 
   const downloadUrls = (urls: string[]) => {
     urls.forEach(url => {
+      // Handle blob video fallbacks
+      if (url === 'BLOB_VIDEO') {
+        console.log("MDP popup: asking background for best network video for blob stream");
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          const tabId = tabs[0]?.id;
+          if (!tabId) return;
+          chrome.runtime.sendMessage({ action: "DOWNLOAD_BEST_VIDEO", tabId }, (resp) => {
+            if (chrome.runtime.lastError) {
+              console.error("MDP popup: blob fallback failed:", chrome.runtime.lastError.message);
+            } else if (resp && resp.error) {
+              console.error("MDP popup: blob error:", resp.error);
+              alert(`Impossible de télécharger cette vidéo. Raison : ${resp.error}\n\nEssayez de rafraîchir la page ou de lancer la lecture de la vidéo pour forcer la détection réseau.`);
+            } else {
+              console.log("MDP popup: blob download started");
+            }
+          });
+        });
+        return;
+      }
+
       // Handle stream downloads (HLS/DASH)
       if (url.startsWith('STREAM::')) {
         const parts = url.split('::');
