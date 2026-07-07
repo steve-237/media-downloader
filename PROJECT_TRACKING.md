@@ -2,6 +2,18 @@
 
 This document serves as a persistent record of all completed steps, architectural decisions, and features implemented during the development of the Media Downloader Pro extension.
 
+## [Phase 4.0] - 2026-07-07 - Streaming Video Download (HLS/DASH)
+**Status: Completed**
+
+- **HLS Download Engine:** Background script now parses `.m3u8` master and media playlists, downloads all `.ts` segments with 4x concurrency, concatenates them into a single video file, and triggers download via `chrome.downloads`.
+- **DASH Download Engine:** Background script parses `.mpd` manifests (XML), identifies the highest quality video representation, and downloads it.
+- **Stream Interception:** Network interceptor now separately tracks HLS/DASH manifest URLs per tab (distinct from direct media files). MIME types: `application/x-mpegurl`, `application/vnd.apple.mpegurl`, `application/dash+xml`.
+- **Popup Integration:** Captured streams appear in the popup as "🎬 Flux HLS/DASH détecté" with a download button that triggers the stream download pipeline.
+- **Content Script Rewrite:** Complete rewrite with Shadow DOM isolation for the MDP button, downward video search (`querySelector('video')` inside parent containers), proper click/mousedown event handling, and blob video fallback to network-intercepted best video.
+- **Git Commits:** 
+  - `fix: complete rewrite of content script - video-only MDP button with Shadow DOM`
+  - `feat: add HLS/DASH streaming video download`
+
 ## [Phase 1.6] - 2026-07-05 - Apple / iOS UI Overhaul & Preview Fix
 **Status: Completed**
 
