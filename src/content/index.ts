@@ -65,7 +65,8 @@ function getFilename(url: string): string {
   }
 }
 
-function getExt(url: string): string {
+function getExt(url: string | null): string {
+  if (!url) return '';
   try {
     const pathname = new URL(url).pathname.split('?')[0];
     const dot = pathname.lastIndexOf('.');
@@ -116,7 +117,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       });
     }
 
-    // Deduplicate variants
     const map = new Map<string, { url: string; width?: number }>();
     rawVariants.forEach(v => { if (!map.has(v.url)) map.set(v.url, v); });
     const variants = Array.from(map.values())
@@ -153,10 +153,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     const poster = abs(v.poster) || '';
     const sources: string[] = [];
 
-    // Direct src
     const vSrc = v.currentSrc || v.src;
     if (vSrc && !vSrc.startsWith('blob:') && isHttp(abs(vSrc))) sources.push(abs(vSrc)!);
-    // <source> children
     v.querySelectorAll('source').forEach(s => {
       const u = abs(s.src || s.getAttribute('src'));
       if (u && !u.startsWith('blob:') && isHttp(u) && !sources.includes(u)) sources.push(u);
@@ -199,7 +197,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     else if (DOC_EXT.has(ext)) addItem('document', url, '', title);
   });
 
-  // --- 6. Embedded media (embed, object, iframe) ---
+  // --- 6. Embedded media ---
   document.querySelectorAll('embed[src], object[data], iframe[src]').forEach(el => {
     const src = abs(el.getAttribute('src') || el.getAttribute('data'));
     if (!isHttp(src)) return;
@@ -209,10 +207,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     else if (ext === '.pdf') addItem('document', src, '', getFilename(src) || 'PDF');
   });
 
-  // --- 7. data-src, data-video-src and other common data attributes ---
-  const dataAttrs = ['data-src', 'data-video-src', 'data-audio-src', 'data-url', 'data-href', 'data-mp4', 'data-webm'];
+  // --- 7. data-src attributes ---
+  const dataAttrNames = ['data-src', 'data-video-src', 'data-audio-src', 'data-url', 'data-href', 'data-mp4', 'data-webm'];
   document.querySelectorAll('[data-src], [data-video-src], [data-audio-src], [data-url], [data-href], [data-mp4], [data-webm]').forEach(el => {
-    for (const attr of dataAttrs) {
+    for (const attr of dataAttrNames) {
       const val = el.getAttribute(attr);
       const url = abs(val);
       if (!isHttp(url)) continue;
@@ -227,244 +225,255 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     }
   });
 
-  // --- 8. Performance API: scan all resources already loaded by the browser ---
+  // --- 8. Performance API ---
   try {
     const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
     for (const entry of entries) {
       const url = entry.name;
-      if (!isHttp(url)) continue;
-      if (url.startsWith('chrome-extension://')) continue;
-
+      if (!isHttp(url) || url.startsWith('chrome-extension://')) continue;
       const ext = getExt(url);
-      const initiatorType = entry.initiatorType;
-
-      if (initiatorType === 'video' || VIDEO_EXT.has(ext)) {
-        addItem('video', url, '', getFilename(url));
-      } else if (initiatorType === 'audio' || AUDIO_EXT.has(ext)) {
-        addItem('audio', url, '', getFilename(url));
-      } else if (DOC_EXT.has(ext)) {
-        addItem('document', url, '', getFilename(url));
-      }
+      const it = entry.initiatorType;
+      if (it === 'video' || VIDEO_EXT.has(ext)) addItem('video', url, '', getFilename(url));
+      else if (it === 'audio' || AUDIO_EXT.has(ext)) addItem('audio', url, '', getFilename(url));
+      else if (DOC_EXT.has(ext)) addItem('document', url, '', getFilename(url));
     }
   } catch (e) {
     console.warn("MDP: Performance API scan failed:", e);
   }
 
-  console.log(`MDP: Detected ${items.length} media items (DOM + Performance).`);
+  console.log(`MDP: Detected ${items.length} media items.`);
   sendResponse({ images: items });
   return true;
 });
 
 
 // ============================================================
-// ON-PAGE FLOATING "MDP" DOWNLOAD BUTTON
+// ON-PAGE FLOATING "MDP" DOWNLOAD BUTTON (VIDEO ONLY)
 // ============================================================
 
-let activeMediaUrl = "";
+let capturedUrl = "";  // The URL captured at mousedown time
 
 /**
- * Walk up DOM to find any element that has downloadable media.
- * Supports: <img>, <video>, <audio>, <a href="file.pdf">, <embed>, <object>, <iframe>, [data-src]
+ * Extract a downloadable video URL from a <video> element.
+ * Returns a direct HTTP URL or null.
  */
-function findDownloadable(el: HTMLElement | null): { element: HTMLElement; url: string } | null {
-  let cur = el;
-  for (let depth = 0; depth < 8 && cur; depth++) {
-    const tag = cur.tagName;
+function getVideoUrl(video: HTMLVideoElement): string | null {
+  // 1. Try currentSrc (the actually playing source)
+  const cur = video.currentSrc;
+  if (cur && isHttp(cur) && !cur.startsWith('blob:')) return cur;
 
-    // --- Video elements ---
-    if (tag === 'VIDEO') {
-      const v = cur as HTMLVideoElement;
-      
-      if (v.currentSrc && !v.currentSrc.startsWith('blob:') && isHttp(v.currentSrc)) return { element: cur, url: v.currentSrc };
-      if (v.src && !v.src.startsWith('blob:') && isHttp(v.src)) return { element: cur, url: v.src };
-      
-      for (const s of v.querySelectorAll('source')) {
-        const u = s.src || s.getAttribute('src');
-        if (u && !u.startsWith('blob:') && isHttp(u)) return { element: cur, url: u };
-      }
-      
-      // If it's a blob: URL (like streaming sites), we intercept from network
-      if ((v.currentSrc && v.currentSrc.startsWith('blob:')) || (v.src && v.src.startsWith('blob:'))) {
-        return { element: cur, url: 'BLOB_VIDEO_STREAM' };
-      }
-      
-      // Fallback: If we don't know the src but it's a video tag, try to download best network video
-      return { element: cur, url: 'BLOB_VIDEO_STREAM' };
-    }
+  // 2. Try src attribute
+  const src = video.getAttribute('src');
+  const absSrc = abs(src);
+  if (absSrc && isHttp(absSrc) && !absSrc.startsWith('blob:')) return absSrc;
 
-    // --- Links to video files ---
-    if (tag === 'A') {
-      const href = (cur as HTMLAnchorElement).href;
-      const url = abs(href);
-      if (url && isHttp(url) && VIDEO_EXT.has(getExt(url))) return { element: cur, url };
-    }
-
-    // --- Embedded videos ---
-    if (tag === 'EMBED' || tag === 'OBJECT' || tag === 'IFRAME') {
-      const src = abs(cur.getAttribute('src') || cur.getAttribute('data'));
-      if (src && isHttp(src)) {
-        if (VIDEO_EXT.has(getExt(src)) || src.includes('youtube.com/embed') || src.includes('vimeo.com/video') || src.includes('dailymotion.com/video')) {
-          return { element: cur, url: src };
-        }
-      }
-    }
-
-    // --- data-src video attributes ---
-    const dataAttrs = ['data-src', 'data-video-src', 'data-url', 'data-mp4', 'data-webm'];
-    for (const attr of dataAttrs) {
-      const val = cur.getAttribute(attr);
-      const url = abs(val);
-      if (url && isHttp(url) && VIDEO_EXT.has(getExt(url))) return { element: cur, url };
-    }
-
-    // --- Check for direct video children ---
-    const child = cur.querySelector(':scope > video') as HTMLElement | null;
-    if (child) {
-      const rect = child.getBoundingClientRect();
-      if (rect.width > 30 && rect.height > 30) {
-        const result = findDownloadable(child);
-        if (result) return result;
-      }
-    }
-
-    cur = cur.parentElement;
+  // 3. Try <source> children
+  const sources = video.querySelectorAll('source');
+  for (const s of sources) {
+    const u = abs(s.getAttribute('src'));
+    if (u && isHttp(u) && !u.startsWith('blob:')) return u;
   }
+
   return null;
 }
 
-// -- Build the floating button --
-const mdpBtn = document.createElement("div");
-mdpBtn.id = "mdp-quick-dl";
+/**
+ * Find a <video> element at or near the target element.
+ * Searches:
+ * 1. The element itself (if it's a video)
+ * 2. Direct video descendants
+ * 3. Parent elements up to 6 levels, including their video descendants
+ */
+function findVideoElement(target: HTMLElement): HTMLVideoElement | null {
+  // Is it a video?
+  if (target.tagName === 'VIDEO') return target as HTMLVideoElement;
 
-const STYLE = [
-  "position:fixed",
-  "z-index:2147483647",
-  "display:none",
-  "align-items:center",
-  "gap:7px",
-  "background:linear-gradient(135deg,#007AFF 0%,#0055D4 100%)",
-  "color:#fff",
-  "border:2px solid rgba(255,255,255,0.45)",
-  "border-radius:12px",
-  "padding:10px 16px",
-  "cursor:pointer",
-  "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif",
-  "font-size:13px",
-  "font-weight:800",
-  "letter-spacing:0.4px",
-  "box-shadow:0 4px 24px rgba(0,122,255,0.55),0 0 0 1px rgba(0,122,255,0.3),inset 0 1px 0 rgba(255,255,255,0.15)",
-  "pointer-events:auto",
-  "user-select:none",
-  "text-shadow:0 1px 2px rgba(0,0,0,0.25)",
-  "line-height:1",
-  "white-space:nowrap",
-  "transition:transform 0.12s ease",
-  "margin:0",
-  "opacity:1",
-  "visibility:visible",
-].map(s => s + " !important").join(";");
+  // Does it contain a video?
+  const childVideo = target.querySelector('video') as HTMLVideoElement | null;
+  if (childVideo) return childVideo;
 
-const DL_ICON = '<svg style="flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-const OK_ICON = '<svg style="flex-shrink:0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-const BTN_LABEL = '<span style="color:#fff!important;font-weight:800!important;font-size:13px!important;font-family:inherit!important">⬇ MDP</span>';
+  // Walk up parents and check for videos
+  let parent = target.parentElement;
+  for (let i = 0; i < 6 && parent; i++) {
+    if (parent.tagName === 'VIDEO') return parent as HTMLVideoElement;
+
+    const vid = parent.querySelector('video') as HTMLVideoElement | null;
+    if (vid) {
+      // Verify it's a "real" video (not a tiny thumbnail)
+      const rect = vid.getBoundingClientRect();
+      if (rect.width > 50 && rect.height > 30) return vid;
+    }
+    parent = parent.parentElement;
+  }
+
+  return null;
+}
+
+// -- Build the floating button using Shadow DOM for style isolation --
+const host = document.createElement('div');
+host.id = 'mdp-host';
+host.style.cssText = 'all:initial !important; position:fixed !important; z-index:2147483647 !important; pointer-events:none !important; top:0 !important; left:0 !important; width:0 !important; height:0 !important;';
+document.documentElement.appendChild(host);
+
+const shadow = host.attachShadow({ mode: 'closed' });
+
+const btnContainer = document.createElement('div');
+btnContainer.innerHTML = `
+  <style>
+    #mdp-btn {
+      position: fixed;
+      z-index: 2147483647;
+      display: none;
+      align-items: center;
+      gap: 7px;
+      background: linear-gradient(135deg, #FF3B30 0%, #C0392B 100%);
+      color: #fff;
+      border: 2px solid rgba(255,255,255,0.5);
+      border-radius: 12px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      box-shadow: 0 4px 20px rgba(255,59,48,0.6), 0 0 0 1px rgba(255,59,48,0.3);
+      pointer-events: auto;
+      user-select: none;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+      line-height: 1;
+      white-space: nowrap;
+      transition: transform 0.15s ease, background 0.3s ease;
+    }
+    #mdp-btn:hover {
+      transform: scale(1.08);
+      background: linear-gradient(135deg, #FF6B6B 0%, #FF3B30 100%);
+    }
+    #mdp-btn:active {
+      transform: scale(0.95);
+    }
+    #mdp-btn.success {
+      background: linear-gradient(135deg, #34C759 0%, #248A3D 100%);
+      box-shadow: 0 4px 20px rgba(52,199,89,0.6), 0 0 0 1px rgba(52,199,89,0.3);
+    }
+    #mdp-btn svg {
+      flex-shrink: 0;
+    }
+  </style>
+  <div id="mdp-btn">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    <span>⬇ MDP</span>
+  </div>
+`;
+shadow.appendChild(btnContainer);
+
+const mdpBtn = shadow.getElementById('mdp-btn') as HTMLDivElement;
+
+const DL_HTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>⬇ MDP</span>`;
+const OK_HTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>✓ Téléchargé !</span>`;
 
 function resetBtn() {
-  mdpBtn.setAttribute("style", STYLE);
-  mdpBtn.innerHTML = DL_ICON + BTN_LABEL;
+  mdpBtn.innerHTML = DL_HTML;
+  mdpBtn.classList.remove('success');
 }
 resetBtn();
 
-// Append to <html>
-document.documentElement.appendChild(mdpBtn);
-
 // -- Download handler --
 function triggerDownload(url: string) {
-  if (url === 'BLOB_VIDEO_STREAM') {
-    console.log("MDP: Blob video detected, asking background for best network video...");
-    try {
-      chrome.runtime.sendMessage({ action: "DOWNLOAD_BEST_VIDEO" }, (resp) => {
-        if (chrome.runtime.lastError || (resp && resp.error)) {
-          console.warn("MDP: Failed to download best video via network intercept:", chrome.runtime.lastError?.message || resp?.error);
-          alert("Désolé, aucune vidéo n'a encore été capturée sur le réseau pour cette page. Laissez la vidéo jouer quelques secondes et réessayez.");
-        }
-      });
-    } catch (err) {
-      console.error("MDP: runtime error", err);
-    }
+  console.log("MDP: triggerDownload called with:", url);
+
+  if (!url) {
+    console.warn("MDP: No URL to download");
     return;
   }
 
-  const downloadUrl = url;
-  console.log("MDP: Requesting download for:", downloadUrl);
-
   try {
-    chrome.runtime.sendMessage({ action: "DOWNLOAD", urls: [downloadUrl] }, (resp) => {
-      if (chrome.runtime.lastError) {
-        console.warn("MDP: sendMessage failed, trying fallback:", chrome.runtime.lastError.message);
-        try {
-          chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url: downloadUrl });
-        } catch {
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = getFilename(downloadUrl) || 'download';
-          a.target = '_blank';
-          a.rel = 'noopener';
-          a.style.display = 'none';
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => a.remove(), 100);
+    chrome.runtime.sendMessage(
+      { action: "DOWNLOAD", urls: [url] },
+      (resp) => {
+        if (chrome.runtime.lastError) {
+          console.warn("MDP: sendMessage error:", chrome.runtime.lastError.message);
+          // Fallback: try opening in a new tab
+          try {
+            chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url });
+          } catch {
+            // Last resort: use <a> tag
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = getFilename(url) || 'video';
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => a.remove(), 200);
+          }
+          return;
         }
-        return;
+        console.log("MDP: Download response:", resp);
+        if (resp && resp.failed && resp.failed > 0) {
+          // Fallback
+          chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url });
+        }
       }
-      if (resp && resp.failed && resp.failed > 0) {
-        console.warn("MDP: Some downloads failed via API, trying tab fallback");
-        chrome.runtime.sendMessage({ action: "DOWNLOAD_VIA_TAB", url: downloadUrl });
-      }
-    });
+    );
   } catch (err) {
-    console.error("MDP: runtime error, last resort download:", err);
+    console.error("MDP: runtime.sendMessage threw:", err);
+    // Last resort
     const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = getFilename(downloadUrl) || 'download';
-    a.target = '_blank';
+    a.href = url;
+    a.download = getFilename(url) || 'video';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => a.remove(), 100);
+    setTimeout(() => a.remove(), 200);
   }
 }
 
-// -- Mouse event: click on the MDP button --
-mdpBtn.addEventListener("mousedown", (e) => {
+// -- MDP Button click handler --
+mdpBtn.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
   e.stopImmediatePropagation();
 
-  if (!activeMediaUrl) return;
+  const url = capturedUrl;
+  console.log("MDP: Button clicked, url =", url);
+  if (!url) return;
 
-  triggerDownload(activeMediaUrl);
+  // If the video is a blob stream, ask background for network-intercepted video
+  if (url === 'BLOB_VIDEO') {
+    console.log("MDP: Blob video, asking background for network video...");
+    try {
+      chrome.runtime.sendMessage({ action: "DOWNLOAD_BEST_VIDEO" }, (resp) => {
+        if (chrome.runtime.lastError) {
+          console.warn("MDP: DOWNLOAD_BEST_VIDEO failed:", chrome.runtime.lastError.message);
+          return;
+        }
+        if (resp && resp.error) {
+          console.warn("MDP: No network video found:", resp.error);
+          // Fallback: try to open the page URL in a new tab
+          alert("MDP: Aucune vidéo directe trouvée. La vidéo est protégée par du streaming (blob). Essayez de laisser la vidéo jouer un peu puis réessayez.");
+        } else {
+          console.log("MDP: Network video download started");
+        }
+      });
+    } catch (err) {
+      console.error("MDP: Error:", err);
+    }
+  } else {
+    // Direct video URL - download it
+    triggerDownload(url);
+  }
 
-  // Visual feedback: green success
-  const currentTop = mdpBtn.style.top;
-  const currentLeft = mdpBtn.style.left;
-  mdpBtn.setAttribute("style",
-    STYLE
-      .replace(/background:[^!]+!important/, "background:linear-gradient(135deg,#34C759 0%,#248A3D 100%) !important")
-      .replace(/box-shadow:[^!]+!important/, "box-shadow:0 4px 24px rgba(52,199,89,0.6),0 2px 8px rgba(0,0,0,0.2) !important")
-      .replace("display:none", "display:flex")
-  );
-  mdpBtn.style.top = currentTop;
-  mdpBtn.style.left = currentLeft;
-  mdpBtn.innerHTML = OK_ICON + '<span style="color:#fff!important;font-weight:800!important;font-size:13px!important;font-family:inherit!important">✓ Téléchargé !</span>';
+  // Visual feedback
+  mdpBtn.innerHTML = OK_HTML;
+  mdpBtn.classList.add('success');
 
   setTimeout(() => {
-    mdpBtn.style.display = "none";
-    setTimeout(resetBtn, 200);
-  }, 1200);
+    mdpBtn.style.display = 'none';
+    resetBtn();
+  }, 1500);
 }, true);
 
-// Block click propagation
-mdpBtn.addEventListener("click", (e) => {
+// Prevent mousedown from bubbling to the page (avoids pausing video etc.)
+mdpBtn.addEventListener('mousedown', (e) => {
   e.preventDefault();
   e.stopPropagation();
   e.stopImmediatePropagation();
@@ -473,51 +482,65 @@ mdpBtn.addEventListener("click", (e) => {
 // -- Hover logic --
 let hideTimer: number | undefined;
 
-function showBtn(el: HTMLElement) {
-  const rect = el.getBoundingClientRect();
-  // For links/documents, allow smaller elements (text links)
-  const minSize = (el.tagName === 'A' || el.tagName === 'EMBED' || el.tagName === 'OBJECT') ? 20 : 50;
-  if (rect.width < minSize || rect.height < minSize) return;
+function showBtnAt(rect: DOMRect) {
+  if (rect.width < 50 || rect.height < 30) return;
 
   clearTimeout(hideTimer);
-  mdpBtn.style.display = "flex";
+  mdpBtn.style.display = 'flex';
 
-  // Position top-right of the element
-  let top = rect.top + 8;
-  let left = rect.right - 140;
-  // For small elements (text links), position to the right instead
-  if (rect.width < 140) {
-    left = rect.right + 8;
-  }
+  // Position at top-right of the video
+  let top = rect.top + 10;
+  let left = rect.right - 150;
+
+  // Clamp to viewport
   if (top < 4) top = 4;
   if (left < 4) left = 4;
   if (top > window.innerHeight - 50) top = window.innerHeight - 50;
-  if (left > window.innerWidth - 150) left = window.innerWidth - 150;
+  if (left > window.innerWidth - 160) left = window.innerWidth - 160;
 
-  mdpBtn.style.top = top + "px";
-  mdpBtn.style.left = left + "px";
+  mdpBtn.style.top = top + 'px';
+  mdpBtn.style.left = left + 'px';
 }
 
-document.addEventListener("mouseover", (e) => {
+document.addEventListener('mouseover', (e) => {
   const target = e.target as HTMLElement;
 
-  // Ignore our own button
-  if (target === mdpBtn || mdpBtn.contains(target)) {
+  // Ignore our own host element
+  if (target === host || host.contains(target)) {
     clearTimeout(hideTimer);
     return;
   }
 
-  // Find any downloadable media (images, videos, audios, doc links, embeds...)
-  const result = findDownloadable(target);
-  if (result) {
-    activeMediaUrl = result.url;
-    showBtn(result.element);
+  // Try to find a video element
+  const video = findVideoElement(target);
+  if (video) {
+    const url = getVideoUrl(video);
+    if (url) {
+      capturedUrl = url;
+    } else {
+      // It's a blob/streaming video
+      capturedUrl = 'BLOB_VIDEO';
+    }
+    showBtnAt(video.getBoundingClientRect());
   } else {
-    hideTimer = window.setTimeout(() => { mdpBtn.style.display = "none"; }, 400);
+    hideTimer = window.setTimeout(() => {
+      mdpBtn.style.display = 'none';
+    }, 500);
   }
 }, true);
 
-mdpBtn.addEventListener("mouseenter", () => clearTimeout(hideTimer));
-mdpBtn.addEventListener("mouseleave", () => {
-  hideTimer = window.setTimeout(() => { mdpBtn.style.display = "none"; }, 400);
+// Keep button visible when hovering over it
+host.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+host.addEventListener('mouseleave', () => {
+  hideTimer = window.setTimeout(() => {
+    mdpBtn.style.display = 'none';
+  }, 500);
+});
+
+// Also listen on shadow root events
+mdpBtn.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+mdpBtn.addEventListener('mouseleave', () => {
+  hideTimer = window.setTimeout(() => {
+    mdpBtn.style.display = 'none';
+  }, 500);
 });
