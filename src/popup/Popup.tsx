@@ -32,10 +32,10 @@ export default function Popup() {
       const tabId = activeTab.id;
       let domMedia: MediaItem[] = [];
       let netMedia: MediaItem[] = [];
+      let streamMedia: MediaItem[] = [];
 
       const updateImages = () => {
-        const all = [...domMedia, ...netMedia];
-        // Deduplicate by URL
+        const all = [...streamMedia, ...domMedia, ...netMedia]; // Streams first for visibility
         const seen = new Set<string>();
         const unique = all.filter(item => {
           const url = item.variants?.[0]?.url || item.thumbnail;
@@ -56,14 +56,18 @@ export default function Popup() {
         }
       });
 
-      // 2. Fetch network-intercepted media from background script
+      // 2. Fetch network-intercepted media + streams from background script
       chrome.runtime.sendMessage({ action: "GET_NETWORK_MEDIA", tabId }, (response: any) => {
         if (chrome.runtime.lastError) {
           console.warn("MDP: Background script not responding.", chrome.runtime.lastError.message);
-        } else if (response && response.media) {
-          let idCounter = 1000; // avoid id collisions
+          return;
+        }
+
+        // Process direct network media
+        if (response && response.media) {
+          let idCounter = 1000;
           netMedia = response.media
-            .filter((nm: any) => nm.type !== 'image') // Skip tiny network images
+            .filter((nm: any) => nm.type !== 'image')
             .map((nm: any) => {
               let label = nm.type === 'video' ? 'Vidéo' : nm.type === 'audio' ? 'Audio' : 'Fichier';
               if (nm.size && nm.size > 0) {
@@ -78,8 +82,24 @@ export default function Popup() {
                 variants: [{ url: nm.url, label: `${label} (Réseau)` }]
               };
             });
-          updateImages();
         }
+
+        // Process captured streams (HLS/DASH)
+        if (response && response.streams && response.streams.length > 0) {
+          let streamCounter = 2000;
+          streamMedia = response.streams.map((s: any) => ({
+            id: `stream_${streamCounter++}`,
+            type: 'video' as MediaType,
+            thumbnail: '',
+            title: `🎬 Flux ${s.type.toUpperCase()} détecté`,
+            variants: [{
+              url: `STREAM::${s.type}::${s.manifestUrl}`,
+              label: `Télécharger le flux ${s.type.toUpperCase()}`
+            }]
+          }));
+        }
+
+        updateImages();
       });
 
     });
@@ -107,6 +127,29 @@ export default function Popup() {
 
   const downloadUrls = (urls: string[]) => {
     urls.forEach(url => {
+      // Handle stream downloads (HLS/DASH)
+      if (url.startsWith('STREAM::')) {
+        const parts = url.split('::');
+        const streamType = parts[1]; // 'hls' or 'dash'
+        const manifestUrl = parts.slice(2).join('::'); // Rest is the URL (may contain ::)
+        console.log(`MDP popup: starting ${streamType} stream download`, manifestUrl);
+        chrome.runtime.sendMessage(
+          { action: "DOWNLOAD_STREAM", manifestUrl, streamType },
+          (resp) => {
+            if (chrome.runtime.lastError) {
+              console.error("MDP popup: stream download failed:", chrome.runtime.lastError.message);
+            } else if (resp && resp.error) {
+              console.error("MDP popup: stream error:", resp.error);
+              alert(`Erreur: ${resp.error}`);
+            } else {
+              console.log("MDP popup: stream download started");
+            }
+          }
+        );
+        return;
+      }
+
+      // Handle direct file downloads
       let filename: string | undefined;
       try {
         const seg = new URL(url).pathname.split('/').pop();
