@@ -50,16 +50,23 @@ function parseHlsMaster(content: string, baseUrl: string): HlsVariant[] {
   return variants.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
 }
 
-function parseHlsMedia(content: string, baseUrl: string): string[] {
+function parseHlsMedia(content: string, baseUrl: string): { initUrl?: string, segments: string[] } {
   const lines = content.split('\n').map(l => l.trim());
   const segments: string[] = [];
+  let initUrl: string | undefined;
+
   for (const line of lines) {
-    if (line && !line.startsWith('#')) {
+    if (line.startsWith('#EXT-X-MAP:')) {
+      const match = line.match(/URI="([^"]+)"/);
+      if (match && match[1]) {
+        initUrl = match[1].startsWith('http') ? match[1] : new URL(match[1], baseUrl).href;
+      }
+    } else if (line && !line.startsWith('#')) {
       const url = line.startsWith('http') ? line : new URL(line, baseUrl).href;
       segments.push(url);
     }
   }
-  return segments;
+  return { initUrl, segments };
 }
 
 function DownloadApp() {
@@ -136,8 +143,12 @@ function DownloadApp() {
       manifestContent = await mediaResp.text();
     }
 
-    const segmentUrls = parseHlsMedia(manifestContent, mediaPlaylistUrl);
-    if (segmentUrls.length === 0) throw new Error("Aucun segment trouvé");
+    const parsed = parseHlsMedia(manifestContent, mediaPlaylistUrl);
+    if (parsed.segments.length === 0) throw new Error("Aucun segment trouvé");
+
+    const segmentUrls: string[] = [];
+    if (parsed.initUrl) segmentUrls.push(parsed.initUrl);
+    segmentUrls.push(...parsed.segments);
 
     setStatus(`Téléchargement de ${segmentUrls.length} segments en cours...`);
     setProgress(10);
@@ -208,8 +219,9 @@ function DownloadApp() {
     const doc = parser.parseFromString(mpdText, 'text/xml');
 
     const adaptationSets = doc.querySelectorAll('AdaptationSet');
-    let bestVideoUrl: string | null = null;
+    let bestRep: Element | null = null;
     let bestBandwidth = 0;
+    let asNode: Element | null = null;
 
     for (const as of Array.from(adaptationSets)) {
       const mimeType = as.getAttribute('mimeType') || '';
@@ -223,29 +235,117 @@ function DownloadApp() {
         const bw = parseInt(rep.getAttribute('bandwidth') || '0', 10);
         if (bw > bestBandwidth) {
           bestBandwidth = bw;
-          const baseUrl = rep.querySelector('BaseURL');
-          if (baseUrl && baseUrl.textContent) {
-            bestVideoUrl = baseUrl.textContent.startsWith('http')
-              ? baseUrl.textContent
-              : new URL(baseUrl.textContent, mpdUrl).href;
-          }
+          bestRep = rep;
+          asNode = as;
         }
       }
     }
 
-    if (!bestVideoUrl) {
+    if (!bestRep) {
       throw new Error("Aucun flux vidéo trouvé dans le manifest DASH");
     }
 
-    setStatus("Téléchargement du flux vidéo...");
-    setProgress(50);
-
-    const videoResp = await fetch(bestVideoUrl);
-    if (!videoResp.ok) throw new Error(`Échec du téléchargement: ${videoResp.status}`);
+    const template = bestRep.querySelector('SegmentTemplate') || asNode?.querySelector('SegmentTemplate');
+    const segmentUrls: string[] = [];
     
-    // Pour les flux DASH simples qui ont un seul BaseURL
-    const buffer = await videoResp.arrayBuffer();
-    const blob = new Blob([buffer], { type: 'video/mp4' });
+    if (template) {
+      const initAttr = template.getAttribute('initialization');
+      const mediaAttr = template.getAttribute('media');
+      const startNumber = parseInt(template.getAttribute('startNumber') || '1', 10);
+      const repId = bestRep.getAttribute('id') || '';
+      
+      const replaceVars = (str: string, num: number) => {
+        let s = str.replace(/\$RepresentationID\$/g, repId);
+        s = s.replace(/\$Number(?:%0(\d+)d)?\$/g, (_, pad) => {
+          if (pad) {
+            return String(num).padStart(parseInt(pad, 10), '0');
+          }
+          return String(num);
+        });
+        return s;
+      };
+
+      if (initAttr) {
+        const initUrl = replaceVars(initAttr, 0);
+        segmentUrls.push(initUrl.startsWith('http') ? initUrl : new URL(initUrl, mpdUrl).href);
+      }
+
+      if (mediaAttr) {
+        const timeline = template.querySelector('SegmentTimeline');
+        if (timeline) {
+          const sNodes = timeline.querySelectorAll('S');
+          let currentNum = startNumber;
+          for (const sNode of Array.from(sNodes)) {
+            const r = parseInt(sNode.getAttribute('r') || '0', 10);
+            for (let i = 0; i <= r; i++) {
+              const mediaUrl = replaceVars(mediaAttr, currentNum);
+              segmentUrls.push(mediaUrl.startsWith('http') ? mediaUrl : new URL(mediaUrl, mpdUrl).href);
+              currentNum++;
+            }
+          }
+        }
+      }
+    } else {
+      const baseUrl = bestRep.querySelector('BaseURL');
+      if (baseUrl && baseUrl.textContent) {
+        const bestVideoUrl = baseUrl.textContent.startsWith('http')
+          ? baseUrl.textContent
+          : new URL(baseUrl.textContent, mpdUrl).href;
+        segmentUrls.push(bestVideoUrl);
+      }
+    }
+
+    if (segmentUrls.length === 0) {
+      throw new Error("Impossible de générer les fragments DASH");
+    }
+
+    setStatus(`Téléchargement de ${segmentUrls.length} fragments DASH...`);
+    setProgress(15);
+
+    const CONCURRENCY = 4;
+    const chunks: ArrayBuffer[] = new Array(segmentUrls.length);
+    let downloaded = 0;
+
+    async function downloadDashSegment(index: number): Promise<void> {
+      let attempts = 0;
+      while (attempts < 3) {
+        try {
+          const resp = await fetch(segmentUrls[index]);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          chunks[index] = await resp.arrayBuffer();
+          downloaded++;
+          const currentProgress = 15 + Math.floor((downloaded / segmentUrls.length) * 80);
+          setProgress(currentProgress);
+          setStatus(`Téléchargement: ${downloaded}/${segmentUrls.length} segments`);
+          return;
+        } catch (e) {
+          attempts++;
+          if (attempts >= 3) throw new Error(`Échec du segment ${index + 1}: ${e}`);
+          await new Promise(r => setTimeout(r, 1000 * attempts));
+        }
+      }
+    }
+
+    for (let i = 0; i < segmentUrls.length; i += CONCURRENCY) {
+      const batch = [];
+      for (let j = i; j < Math.min(i + CONCURRENCY, segmentUrls.length); j++) {
+        batch.push(downloadDashSegment(j));
+      }
+      await Promise.all(batch);
+    }
+
+    setStatus("Assemblage du fichier vidéo...");
+    setProgress(95);
+
+    const totalSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+    const combined = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(new Uint8Array(chunk), offset);
+      offset += chunk.byteLength;
+    }
+
+    const blob = new Blob([combined], { type: 'video/mp4' });
 
     let filename = getFilenameFromUrl(mpdUrl) || 'video';
     filename = filename.replace('.mpd', '.mp4');
