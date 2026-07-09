@@ -26,6 +26,18 @@ function getExtFromUrl(url: string): string {
   } catch { return ''; }
 }
 
+function parsePTDuration(pt: string): number {
+  let seconds = 0;
+  const match = pt.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?/);
+  if (match) {
+    const h = parseFloat(match[1] || '0');
+    const m = parseFloat(match[2] || '0');
+    const s = parseFloat(match[3] || '0');
+    seconds = h * 3600 + m * 60 + s;
+  }
+  return seconds;
+}
+
 // HLS Parsers
 function parseHlsMaster(content: string, baseUrl: string): HlsVariant[] {
   const lines = content.split('\n').map(l => l.trim());
@@ -283,15 +295,49 @@ function DownloadApp() {
               currentNum++;
             }
           }
+        } else {
+          // Duration based fallback
+          const mpdDuration = doc.querySelector('MPD')?.getAttribute('mediaPresentationDuration');
+          const timescale = parseFloat(template.getAttribute('timescale') || '1');
+          const duration = parseFloat(template.getAttribute('duration') || '0');
+          
+          if (mpdDuration && duration > 0) {
+            const totalSeconds = parsePTDuration(mpdDuration);
+            const segmentSeconds = duration / timescale;
+            const totalSegments = Math.ceil(totalSeconds / segmentSeconds);
+            
+            let currentNum = startNumber;
+            for (let i = 0; i < totalSegments; i++) {
+              const mediaUrl = replaceVars(mediaAttr, currentNum);
+              segmentUrls.push(mediaUrl.startsWith('http') ? mediaUrl : new URL(mediaUrl, mpdUrl).href);
+              currentNum++;
+            }
+          }
         }
       }
     } else {
-      const baseUrl = bestRep.querySelector('BaseURL');
-      if (baseUrl && baseUrl.textContent) {
-        const bestVideoUrl = baseUrl.textContent.startsWith('http')
-          ? baseUrl.textContent
-          : new URL(baseUrl.textContent, mpdUrl).href;
-        segmentUrls.push(bestVideoUrl);
+      // Try SegmentList
+      const segList = bestRep.querySelector('SegmentList') || asNode?.querySelector('SegmentList');
+      if (segList) {
+        const init = segList.querySelector('Initialization');
+        if (init) {
+          const initUrl = init.getAttribute('sourceURL');
+          if (initUrl) segmentUrls.push(initUrl.startsWith('http') ? initUrl : new URL(initUrl, mpdUrl).href);
+        }
+        const segUrls = segList.querySelectorAll('SegmentURL');
+        for (const seg of Array.from(segUrls)) {
+          const mUrl = seg.getAttribute('media');
+          if (mUrl) segmentUrls.push(mUrl.startsWith('http') ? mUrl : new URL(mUrl, mpdUrl).href);
+        }
+      } else {
+        // Fallback to BaseURL
+        const baseUrl = bestRep.querySelector('BaseURL');
+        if (baseUrl && baseUrl.textContent) {
+          const bestVideoUrl = baseUrl.textContent.startsWith('http')
+            ? baseUrl.textContent
+            : new URL(baseUrl.textContent, mpdUrl).href;
+          segmentUrls.push(bestVideoUrl);
+        }
       }
     }
 
