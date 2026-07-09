@@ -21,13 +21,19 @@ const manifest = defineManifest({
     "<all_urls>"
   ],
   background: {
-    service_worker: "src/background/index.ts",
+    service_worker: "src/background/background.ts",
     type: "module"
   },
   content_scripts: [
     {
       matches: ["<all_urls>"],
-      js: ["src/content/index.ts"]
+      js: ["src/content/content.ts"]
+    }
+  ],
+  web_accessible_resources: [
+    {
+      resources: ["download.html"],
+      matches: ["<all_urls>"]
     }
   ]
 })

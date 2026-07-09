@@ -258,7 +258,7 @@ chrome.runtime.onMessage.addListener(
         console.log(`MDP: Redirecting ${stream.type} stream to dedicated download tab:`, stream.manifestUrl);
 
         // Open download.html in a new tab
-        const url = chrome.runtime.getURL(`download.html?manifestUrl=${encodeURIComponent(stream.manifestUrl)}&type=${stream.type}`);
+        const url = chrome.runtime.getURL("download.html") + `?manifestUrl=${encodeURIComponent(stream.manifestUrl)}&type=${stream.type}`;
         chrome.tabs.create({ url, active: true });
         
         sendResponse({ status: "ok", type: "stream" });
@@ -281,7 +281,7 @@ chrome.runtime.onMessage.addListener(
 
       console.log(`MDP: Redirecting ${streamType} stream download to dedicated tab:`, manifestUrl);
       
-      const url = chrome.runtime.getURL(`download.html?manifestUrl=${encodeURIComponent(manifestUrl)}&type=${streamType}`);
+      const url = chrome.runtime.getURL("download.html") + `?manifestUrl=${encodeURIComponent(manifestUrl)}&type=${streamType}`;
       chrome.tabs.create({ url, active: true });
       
       sendResponse({ status: "ok" });
