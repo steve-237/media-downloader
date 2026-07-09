@@ -154,202 +154,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 // ============================================================
-// HLS (.m3u8) PARSER & DOWNLOADER
+// HLS/DASH DOWNLOAD HANDLERS
 // ============================================================
-
-interface HlsVariant {
-  url: string;
-  bandwidth?: number;
-  resolution?: string;
-}
-
-/** Parse an HLS master playlist and return variant streams sorted by bandwidth (highest first) */
-function parseHlsMaster(content: string, baseUrl: string): HlsVariant[] {
-  const lines = content.split('\n').map(l => l.trim());
-  const variants: HlsVariant[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith('#EXT-X-STREAM-INF:')) {
-      const attrs = lines[i].substring(18);
-      const bwMatch = attrs.match(/BANDWIDTH=(\d+)/);
-      const resMatch = attrs.match(/RESOLUTION=(\S+)/);
-      const nextLine = lines[i + 1];
-      if (nextLine && !nextLine.startsWith('#')) {
-        const url = nextLine.startsWith('http') ? nextLine : new URL(nextLine, baseUrl).href;
-        variants.push({
-          url,
-          bandwidth: bwMatch ? parseInt(bwMatch[1], 10) : undefined,
-          resolution: resMatch ? resMatch[1] : undefined,
-        });
-      }
-    }
-  }
-
-  return variants.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0));
-}
-
-/** Parse an HLS media playlist and return segment URLs */
-function parseHlsMedia(content: string, baseUrl: string): string[] {
-  const lines = content.split('\n').map(l => l.trim());
-  const segments: string[] = [];
-
-  for (const line of lines) {
-    if (line && !line.startsWith('#')) {
-      const url = line.startsWith('http') ? line : new URL(line, baseUrl).href;
-      segments.push(url);
-    }
-  }
-
-  return segments;
-}
-
-/** Check if content is a master playlist (has EXT-X-STREAM-INF) */
-function isMasterPlaylist(content: string): boolean {
-  return content.includes('#EXT-X-STREAM-INF:');
-}
-
-/** Download all segments and concatenate them into a single Blob */
-async function downloadHlsStream(manifestUrl: string, sendProgress: (msg: string) => void): Promise<{ blob: Blob; filename: string }> {
-  sendProgress("Fetching manifest...");
-
-  // Step 1: Fetch the manifest
-  const manifestResp = await fetch(manifestUrl);
-  if (!manifestResp.ok) throw new Error(`Failed to fetch manifest: ${manifestResp.status}`);
-  let manifestContent = await manifestResp.text();
-
-  // Step 2: If it's a master playlist, get the best quality variant
-  let mediaPlaylistUrl = manifestUrl;
-  if (isMasterPlaylist(manifestContent)) {
-    const variants = parseHlsMaster(manifestContent, manifestUrl);
-    if (variants.length === 0) throw new Error("No variants found in master playlist");
-
-    // Pick highest quality
-    const best = variants[0];
-    sendProgress(`Selected quality: ${best.resolution || 'best'} (${best.bandwidth ? Math.round(best.bandwidth / 1000) + ' kbps' : 'unknown bitrate'})`);
-
-    mediaPlaylistUrl = best.url;
-    const mediaResp = await fetch(mediaPlaylistUrl);
-    if (!mediaResp.ok) throw new Error(`Failed to fetch media playlist: ${mediaResp.status}`);
-    manifestContent = await mediaResp.text();
-  }
-
-  // Step 3: Parse segments
-  const segmentUrls = parseHlsMedia(manifestContent, mediaPlaylistUrl);
-  if (segmentUrls.length === 0) throw new Error("No segments found in playlist");
-
-  sendProgress(`Found ${segmentUrls.length} segments. Downloading...`);
-
-  // Step 4: Download all segments with concurrency control
-  const CONCURRENCY = 4;
-  const chunks: ArrayBuffer[] = new Array(segmentUrls.length);
-  let downloaded = 0;
-
-  async function downloadSegment(index: number): Promise<void> {
-    const resp = await fetch(segmentUrls[index]);
-    if (!resp.ok) throw new Error(`Segment ${index + 1} failed: ${resp.status}`);
-    chunks[index] = await resp.arrayBuffer();
-    downloaded++;
-    if (downloaded % 10 === 0 || downloaded === segmentUrls.length) {
-      sendProgress(`Downloaded ${downloaded}/${segmentUrls.length} segments (${Math.round(downloaded / segmentUrls.length * 100)}%)`);
-    }
-  }
-
-  // Process in batches
-  for (let i = 0; i < segmentUrls.length; i += CONCURRENCY) {
-    const batch = [];
-    for (let j = i; j < Math.min(i + CONCURRENCY, segmentUrls.length); j++) {
-      batch.push(downloadSegment(j));
-    }
-    await Promise.all(batch);
-  }
-
-  sendProgress("Assembling video file...");
-
-  // Step 5: Concatenate all chunks
-  const totalSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const combined = new Uint8Array(totalSize);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(new Uint8Array(chunk), offset);
-    offset += chunk.byteLength;
-  }
-
-  // Determine file extension based on first segment
-  const firstSegExt = getExtFromUrl(segmentUrls[0]);
-  const ext = firstSegExt === '.ts' ? '.ts' : firstSegExt === '.mp4' ? '.mp4' : '.ts';
-
-  // Generate filename from manifest URL or page
-  let filename = getFilenameFromUrl(manifestUrl) || 'video';
-  filename = filename.replace('.m3u8', '').replace('.mpd', '');
-  if (!filename.includes('.')) filename += ext;
-
-  const blob = new Blob([combined], { type: ext === '.mp4' ? 'video/mp4' : 'video/mp2t' });
-
-  sendProgress(`Complete! ${(totalSize / (1024 * 1024)).toFixed(1)} MB`);
-
-  return { blob, filename };
-}
-
-// ============================================================
-// DASH (.mpd) BASIC PARSER & DOWNLOADER
-// ============================================================
-
-/** Parse a simple DASH MPD and extract segment URLs for the highest quality video */
-async function downloadDashStream(mpdUrl: string, sendProgress: (msg: string) => void): Promise<{ blob: Blob; filename: string }> {
-  sendProgress("Fetching DASH manifest...");
-
-  const resp = await fetch(mpdUrl);
-  if (!resp.ok) throw new Error(`Failed to fetch MPD: ${resp.status}`);
-  const mpdText = await resp.text();
-
-  // Parse XML
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(mpdText, 'text/xml');
-
-  // Find all video AdaptationSets
-  const adaptationSets = doc.querySelectorAll('AdaptationSet');
-  let bestVideoUrl: string | null = null;
-  let bestBandwidth = 0;
-
-  for (const as of adaptationSets) {
-    const mimeType = as.getAttribute('mimeType') || '';
-    const contentType = as.getAttribute('contentType') || '';
-    const isVideo = mimeType.includes('video') || contentType === 'video';
-    
-    if (!isVideo) continue;
-
-    const representations = as.querySelectorAll('Representation');
-    for (const rep of representations) {
-      const bw = parseInt(rep.getAttribute('bandwidth') || '0', 10);
-      if (bw > bestBandwidth) {
-        bestBandwidth = bw;
-        // Look for BaseURL first
-        const baseUrl = rep.querySelector('BaseURL');
-        if (baseUrl && baseUrl.textContent) {
-          bestVideoUrl = baseUrl.textContent.startsWith('http')
-            ? baseUrl.textContent
-            : new URL(baseUrl.textContent, mpdUrl).href;
-        }
-      }
-    }
-  }
-
-  if (bestVideoUrl) {
-    sendProgress("Downloading video stream...");
-    const videoResp = await fetch(bestVideoUrl);
-    if (!videoResp.ok) throw new Error(`Failed to fetch video: ${videoResp.status}`);
-    const buffer = await videoResp.arrayBuffer();
-    const blob = new Blob([buffer], { type: 'video/mp4' });
-
-    let filename = getFilenameFromUrl(mpdUrl) || 'video';
-    filename = filename.replace('.mpd', '.mp4');
-
-    sendProgress(`Complete! ${(buffer.byteLength / (1024 * 1024)).toFixed(1)} MB`);
-    return { blob, filename };
-  }
-
-  throw new Error("No video representation found in DASH manifest");
-}
+// Note: Stream downloading has been moved to a dedicated tab (download.html)
+// to bypass Service Worker memory limits and base64 string constraints.
 
 // ============================================================
 // MESSAGE HANDLER
@@ -447,37 +255,13 @@ chrome.runtime.onMessage.addListener(
       const streams = capturedStreams.get(tabId) || [];
       if (streams.length > 0) {
         const stream = streams[streams.length - 1]; // Most recent stream
+        console.log(`MDP: Redirecting ${stream.type} stream to dedicated download tab:`, stream.manifestUrl);
 
-        console.log(`MDP: Downloading ${stream.type} stream:`, stream.manifestUrl);
-
-        const downloadFn = stream.type === 'hls' ? downloadHlsStream : downloadDashStream;
-
-        downloadFn(stream.manifestUrl, (msg) => {
-          console.log("MDP [STREAM]:", msg);
-        })
-          .then(({ blob, filename }) => {
-            // Convert blob to data URL for chrome.downloads
-            const reader = new FileReader();
-            reader.onload = () => {
-              const dataUrl = reader.result as string;
-              chrome.downloads.download(
-                { url: dataUrl, filename, conflictAction: "uniquify" },
-                (downloadId) => {
-                  if (chrome.runtime.lastError) {
-                    sendResponse({ error: chrome.runtime.lastError.message });
-                  } else {
-                    sendResponse({ status: "ok", downloadId, type: "stream" });
-                  }
-                }
-              );
-            };
-            reader.readAsDataURL(blob);
-          })
-          .catch((err: Error) => {
-            console.error("MDP: Stream download failed:", err.message);
-            sendResponse({ error: `Stream download failed: ${err.message}` });
-          });
-
+        // Open download.html in a new tab
+        const url = chrome.runtime.getURL(`download.html?manifestUrl=${encodeURIComponent(stream.manifestUrl)}&type=${stream.type}`);
+        chrome.tabs.create({ url, active: true });
+        
+        sendResponse({ status: "ok", type: "stream" });
         return true;
       }
 
@@ -495,37 +279,12 @@ chrome.runtime.onMessage.addListener(
         return true;
       }
 
-      console.log(`MDP: Starting ${streamType} stream download:`, manifestUrl);
-
-      const downloadFn = streamType === 'hls' ? downloadHlsStream : downloadDashStream;
-
-      downloadFn(manifestUrl, (msg) => {
-        console.log("MDP [STREAM]:", msg);
-        // Send progress to any listening popup
-        chrome.runtime.sendMessage({ action: "STREAM_PROGRESS", message: msg }).catch(() => {});
-      })
-        .then(({ blob, filename }) => {
-          const reader = new FileReader();
-          reader.onload = () => {
-            const dataUrl = reader.result as string;
-            chrome.downloads.download(
-              { url: dataUrl, filename, conflictAction: "uniquify" },
-              (downloadId) => {
-                if (chrome.runtime.lastError) {
-                  sendResponse({ error: chrome.runtime.lastError.message });
-                } else {
-                  sendResponse({ status: "ok", downloadId });
-                }
-              }
-            );
-          };
-          reader.readAsDataURL(blob);
-        })
-        .catch((err: Error) => {
-          console.error("MDP: Stream download failed:", err.message);
-          sendResponse({ error: `Stream download failed: ${err.message}` });
-        });
-
+      console.log(`MDP: Redirecting ${streamType} stream download to dedicated tab:`, manifestUrl);
+      
+      const url = chrome.runtime.getURL(`download.html?manifestUrl=${encodeURIComponent(manifestUrl)}&type=${streamType}`);
+      chrome.tabs.create({ url, active: true });
+      
+      sendResponse({ status: "ok" });
       return true;
     }
 
