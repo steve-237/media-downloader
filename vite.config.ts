@@ -47,7 +47,8 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        download: 'download.html'
+        download: 'download.html',
+        record: 'record.html'
       }
     }
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, Search, Maximize2, Check, X, ChevronDown, Film, Music, FileText, Image as ImageIcon } from 'lucide-react';
+import { Download, Search, Maximize2, Check, X, ChevronDown, Film, Music, FileText, Image as ImageIcon, MonitorPlay } from 'lucide-react';
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document';
 
@@ -198,6 +198,11 @@ export default function Popup() {
     downloadUrls(urlsToDownload);
   };
 
+  const openRecordTab = () => {
+    const url = chrome.runtime.getURL("record.html");
+    chrome.tabs.create({ url, active: true });
+  };
+
   const openPreview = (img: MediaItem) => {
     if (img.type !== 'image') return; // Only preview images as requested
     setPreviewImage(img);
@@ -346,11 +351,18 @@ export default function Popup() {
       </div>
 
       {/* Footer Action */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#f5f5f7] via-[#f5f5f7]/90 to-transparent pt-12 z-10">
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-[#f5f5f7] via-[#f5f5f7]/90 to-transparent pt-12 z-10 flex gap-2">
+        <button 
+          onClick={openRecordTab}
+          className="bg-gray-900 hover:bg-black text-white font-semibold py-3.5 px-4 rounded-2xl shadow-lg shadow-gray-900/20 transition-all active:scale-[0.98] flex items-center justify-center"
+          title="Enregistrer l'écran (pour vidéos protégées DRM)"
+        >
+          <MonitorPlay size={20} strokeWidth={2.5} />
+        </button>
         <button 
           onClick={handleDownloadSelected}
           disabled={selectedIds.size === 0}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3.5 px-4 rounded-2xl shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 disabled:shadow-none flex items-center justify-center gap-2"
+          className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3.5 px-4 rounded-2xl shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 disabled:shadow-none flex items-center justify-center gap-2"
         >
           <Download size={20} strokeWidth={2.5} />
           Télécharger ({selectedIds.size})
